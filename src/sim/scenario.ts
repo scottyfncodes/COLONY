@@ -1,5 +1,6 @@
 import { OBJECT_DEFS } from './actions';
 import { count } from './inventory';
+import { CATASTROPHES, defense, difficultyInfo, isActive, radiationNow } from './catastrophes';
 import { aliveSurvivors } from './survivors';
 import { END_MINUTE, dayOf, formatDuration } from './time';
 import type { GameState, ScenarioResult } from './types';
@@ -31,6 +32,8 @@ export function systemStatus(s: GameState) {
 }
 
 export function objectives(s: GameState): Objective[] {
+  const def = CATASTROPHES[s.world.catastrophe];
+  const c = s.world.climax;
   const alive = aliveSurvivors(s).length;
   const total = s.survivors.length;
   const sys = systemStatus(s);
@@ -70,12 +73,15 @@ export function objectives(s: GameState): Objective[] {
     },
     {
       id: 'storm',
-      label: 'Weather the storm',
-      detail: 'Come through the storm with the settlement intact.',
+      label: def.climax.objective,
+      detail: def.climax.detail,
       optional: false,
       done: !!s.objectivesDone.storm,
-      progress: s.weather.stormResolved ? `${s.stats.stormDamage.length} damage reports` : s.weather.stormForecastKnown ? `in ${formatDuration(s.weather.stormStart - s.minute)}` : 'coming…',
+      progress: c.resolved ? `${s.stats.stormDamage.length} damage reports` : c.known ? `in ${formatDuration(c.at - s.minute)}` : 'coming…',
     },
+    ...(def.objective
+      ? [{ id: def.objective.id, label: def.objective.label, detail: def.objective.detail, optional: false, done: s.minute >= END_MINUTE || !!s.result ? def.objective.done(s) : !!s.objectivesDone[def.objective.id] || def.objective.done(s), progress: def.objective.progress(s) }]
+      : []),
     {
       id: 'day7',
       label: 'Reach the end of Day 7',
@@ -127,8 +133,9 @@ export function updateObjectives(s: GameState): void {
   if (!done.water && s.stats.cleanWaterMade >= 40) done.water = s.minute;
   const beds = s.objects.filter((o) => o.type === 'planter' && (o.state === 'growing' || o.state === 'ready')).length;
   if (!done.food && (beds >= 3 || s.stats.foodGrown >= 10)) done.food = s.minute;
-  if (!done.storm && s.weather.stormResolved) {
-    const stormDeaths = s.stats.deaths.filter((d) => d.minute >= s.weather.stormStart && d.minute <= s.weather.stormEnd).length;
+  if (!done.storm && s.world.climax.resolved) {
+    const c = s.world.climax;
+    const stormDeaths = s.stats.deaths.filter((d) => d.minute >= c.at && d.minute <= Math.max(c.end, s.minute)).length;
     if (stormDeaths === 0 && s.stats.stormDamage.length <= 3) done.storm = s.minute;
   }
 }
@@ -139,6 +146,18 @@ export function immediateObjective(s: GameState): string {
   const gen = s.objects.find((o) => o.type === 'generator');
   const hoursToStorm = (s.weather.stormStart - s.minute) / 60;
   if (s.weather.kind === 'storm') return 'Ride out the storm. Outdoor work is impossible.';
+  const trapped = s.survivors.find((x) => x.alive && x.trapped);
+  if (trapped) return `Dig ${trapped.name.split(' ')[0]} out of the rubble before it’s too late.`;
+  if (s.objects.some((o) => o.data.burning)) return 'Fire! Douse it with water before it burns out.';
+  const spreading = s.survivors.some((x) => x.alive && !x.away && x.illness?.kind === 'fever' && x.illness.stage === 'sick' && !x.quarantined);
+  if (spreading) return 'The fever is spreading. Isolate the sick and treat them.';
+  const bitten = s.survivors.find((x) => x.alive && x.illness?.kind === 'bite');
+  if (bitten) return `${bitten.name.split(' ')[0]} is bitten. Treat the wound (2 meds) before it turns.`;
+  if (radiationNow(s) > 4) return 'Radiation is high outside. Keep outdoor work short and filter your water.';
+  if (isActive(s, 'outbreak') && s.world.horde > defense(s).value * 6) return 'The infected are massing. Cut the noise or strengthen the fence.';
+  if (isActive(s, 'collapse') && s.world.threat >= 50) return 'The Ridge Crew are getting bolder. Secure the gate and build barricades.';
+  if (isActive(s, 'quake') && s.world.climax.known && !s.world.climax.resolved && s.objects.filter((o) => o.type === 'levee').length < 2)
+    return 'The flood is coming. Stack sandbag levees on the low ground.';
   if (s.weather.stormResolved && s.stats.stormDamage.length && s.objects.some((o) => ['flooded', 'broken'].includes(o.state) && ['generator', 'waterPump'].includes(o.type)))
     return 'Repair what the storm broke.';
   if (count(s, 'water') < 10 && !sys.treatment) {
@@ -162,8 +181,10 @@ export function evaluateEnd(s: GameState, early = false): ScenarioResult {
   const objs = objectives(s);
   const optionalDone = objs.filter((o) => o.optional && o.done).length;
   const lines: string[] = [];
+  const def = CATASTROPHES[s.world.catastrophe];
+  lines.push(`${def.name} (${def.kind.toLowerCase()}), ${difficultyInfo(s.world.difficulty).label.toLowerCase()}${s.world.mode === 'sandbox' ? ', sandbox' : ''}${s.world.extra.length ? ` + ${s.world.extra.map((x) => CATASTROPHES[x].name).join(', ')}` : ''}.`);
   lines.push(`${alive} of ${s.survivors.length} survivors alive.`);
-  for (const d of s.stats.deaths) lines.push(`${d.name} died of ${d.cause} on Day ${dayOf(d.minute)}.`);
+  for (const d of s.stats.deaths) lines.push(d.cause.startsWith('left') ? `${d.name} ${d.cause} on Day ${dayOf(d.minute)}.` : `${d.name} died of ${d.cause} on Day ${dayOf(d.minute)}.`);
   lines.push(`Power: ${sys.power ? 'reliable' : 'unreliable'} — ${s.stats.powerHours.toFixed(0)} powered hours, ${count(s, 'fuel').toFixed(1)} L fuel left.`);
   lines.push(`Water: ${sys.water ? 'safe supply running' : 'no reliable treated supply'} — ${s.stats.cleanWaterMade.toFixed(0)} L treated, ${count(s, 'water').toFixed(0)} L in store.`);
   lines.push(`Food: ${sys.food ? 'beds producing' : 'not sustainable yet'} — ${s.stats.foodGrown} rations grown, ${count(s, 'food')} in store.`);

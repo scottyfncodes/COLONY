@@ -1,21 +1,18 @@
-import { createGame } from '../src/sim/setup';
-import { runEvents } from '../src/sim/events';
+import { newGame } from '../src/sim/sim';
 import { playBot } from '../tests/bot';
 import { dayOf, clockString } from '../src/sim/time';
-const s = createGame(Number(process.argv[2] ?? 42));
-runEvents(s);
+import type { CatastropheId } from '../src/sim/types';
+const cat = (process.argv[2] ?? 'storm') as CatastropheId;
+const s = newGame(Number(process.argv[3] ?? 42), { catastrophe: cat });
+const verbose = process.argv[4] === 'v';
 let lastLog = 0;
-for (let h = 0; h < 7 * 24; h++) {
+for (let h = 0; h < 7 * 24 + 2 && !s.result; h++) {
   playBot(s, 60);
   for (; lastLog < s.log.length; lastLog++) {
     const e = s.log[lastLog];
-    console.log(`D${dayOf(e.t)} ${clockString(e.t)} [${e.tone}] ${e.text}`);
+    if (verbose || e.tone !== 'info') console.log(`D${dayOf(e.t)} ${clockString(e.t)} [${e.tone}] ${e.text}`);
   }
-  if (h % 12 === 0) {
-    const inv = Object.entries(s.inventory).map(([k, v]) => `${k}:${(v as number).toFixed(1)}`).join(' ');
-    console.log(`   == D${dayOf(s.minute)} ${clockString(s.minute)} inv ${inv} | jobs ${s.jobs.length} | ${s.survivors.map((x) => `${x.name.split(' ')[0]}:${x.activity}:h${x.health.toFixed(0)}t${x.thirst.toFixed(0)}f${x.hunger.toFixed(0)}e${x.energy.toFixed(0)}`).join(' ')}`);
-    console.log(`   == jobs: ${s.jobs.map((j) => `${j.label}[${j.phase}${j.assigneeId ? ':' + j.assigneeId.slice(2) : ''}${j.blockedReason ? ' ' + j.blockedReason : ''}]`).join(', ')}`);
-  }
-  if (s.result) break;
 }
-console.log(JSON.stringify(s.result, null, 1));
+console.log(cat, s.result?.status, s.result?.grade, '|', s.result?.lines.slice(0, 3).join(' | '));
+console.log('objectives', s.result?.objectives.map((o) => `${o.label}:${o.done ? 'Y' : 'n'}`).join(', '));
+console.log('world', JSON.stringify({ ...s.world, director: { counts: s.world.director.counts } }).slice(0, 400));

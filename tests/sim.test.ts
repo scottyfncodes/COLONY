@@ -30,6 +30,15 @@ function runUntil(s: GameState, pred: () => boolean, max = 3000): number {
   throw new Error('condition never met');
 }
 
+/** Advance, answering any decisions with their first available choice. */
+function advanceAuto(s: GameState, minutes: number): void {
+  for (let i = 0; i < minutes; i++) {
+    if (s.result) return;
+    if (s.events.pending) dispatch(s, { type: 'choose', choiceId: s.events.pending.choices.find((x) => x.available)!.id });
+    step(s);
+  }
+}
+
 function checkConservation(s: GameState, initial: Items) {
   const expected = addItems(addItems(initial, s.ledger.produced), s.ledger.consumed, -1);
   const actual = worldTotal(s);
@@ -233,7 +242,7 @@ describe('survivors', () => {
     const s = game();
     consume(s, { water: count(s, 'water') });
     for (const x of s.survivors) x.autoWork = false;
-    advance(s, 3 * 24 * 60);
+    advanceAuto(s, 3 * 24 * 60);
     expect(s.stats.deaths.length).toBeGreaterThan(0);
     expect(s.stats.deaths[0].cause).toBe('dehydration');
   });
