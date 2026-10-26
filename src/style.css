@@ -1645,3 +1645,47 @@ select {
   border-color: transparent;
   text-align: center;
 }
+
+.wateropts {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.wateropts li {
+  display: grid;
+  grid-template-columns: 18px auto 1fr;
+  gap: 6px;
+  align-items: center;
+}
+.wateropts li > .ic {
+  width: 15px;
+  height: 15px;
+  color: var(--dim);
+}
+.wateropts li.ok > .ic {
+  color: var(--good);
+}
+.wateropts .lnk,
+.wateropts b {
+  font-size: 14px;
+  white-space: nowrap;
+}
+.wateropts span {
+  color: var(--muted);
+  min-width: 0;
+}
+
+#objective,
+#alerts {
+  max-width: 100%;
+  min-width: 0;
+}
+#objective button {
+  max-width: 100%;
+}
+.obj-text {
+  min-width: 0;
+}

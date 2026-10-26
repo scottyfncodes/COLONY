@@ -141,7 +141,10 @@ export function immediateObjective(s: GameState): string {
   if (s.weather.kind === 'storm') return 'Ride out the storm. Outdoor work is impossible.';
   if (s.weather.stormResolved && s.stats.stormDamage.length && s.objects.some((o) => ['flooded', 'broken'].includes(o.state) && ['generator', 'waterPump'].includes(o.type)))
     return 'Repair what the storm broke.';
-  if (count(s, 'water') < 10 && !sys.treatment) return 'Drinking water is running out. Find or make more.';
+  if (count(s, 'water') < 10 && !sys.treatment) {
+    if (count(s, 'rawWater') >= 8) return 'Low on safe water: boil untreated water at the mess table, or build a sand filter.';
+    return 'Low on safe water: draw water from the well by hand, then boil or filter it.';
+  }
   if (gen && gen.state !== 'operational' && gen.state !== 'dismantled') return 'Get the generator running — power unlocks the well.';
   if (!sys.source) return 'Get water flowing from a source.';
   if (!sys.treatment) return 'Untreated water makes people sick. Set up treatment.';

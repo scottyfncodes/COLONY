@@ -239,7 +239,7 @@ export function workRate(state: GameState, s: Survivor, job: Job): number {
   if (isNight(state.minute) && s.trait !== 'nightOwl' && job.exposed && !litNear(state, s.x, s.y)) r *= 0.75;
   if (job.kind === 'craft') {
     const bench = getObject(state, job.targetId);
-    if (bench && !bench.powered) r *= 0.6;
+    if (bench && bench.type === 'workbench' && !bench.powered) r *= 0.6;
   }
   return r;
 }

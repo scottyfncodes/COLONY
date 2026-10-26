@@ -47,7 +47,7 @@ export const LOCATIONS: Record<LocationId, LocationDef> = {
     searchMinutes: 180,
     risk: 0.2,
     map: { x: 0.56, y: 0.86 },
-    hint: 'Electrical parts · filter cartridges · fuel',
+    hint: 'Untreated water every visit · electrical parts · filters',
   },
 };
 
@@ -55,7 +55,7 @@ export const MAX_TEAM = 3;
 export const CARGO_PER_MEMBER = 8;
 export const WATER_PER_MEMBER = 10;
 /** Priority order when cargo space is limited. */
-const LOOT_PRIORITY: ItemId[] = ['fuel', 'mech', 'elec', 'filter', 'meds', 'food', 'water', 'battery', 'tools', 'scrap'];
+const LOOT_PRIORITY: ItemId[] = ['fuel', 'mech', 'elec', 'filter', 'meds', 'food', 'water', 'rawWater', 'battery', 'tools', 'scrap'];
 
 export function vehicleAvailable(state: GameState): boolean {
   return state.objects.some((o) => o.type === 'forklift' && o.state === 'operational');
@@ -193,6 +193,8 @@ function search(state: GameState, exp: Expedition): void {
     loc.loot[id] = Math.max(0, (loc.loot[id] ?? 0) - (got[id] ?? 0));
     if (!loc.loot[id]) delete loc.loot[id];
   }
+  // The station's hand pump never runs dry: fill any spare containers with untreated water.
+  if (exp.destination === 'pumpStation') Object.assign(got, addFind(state, exp, { rawWater: 60 }));
   loc.visits++;
   exp.log.push(isEmpty(got) ? 'The place has been picked clean.' : `Recovered ${describeItems(got)}.`);
   // Risk: each member may be hurt while searching.

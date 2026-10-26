@@ -28,7 +28,7 @@ export const OBJECT_DEFS: Record<ObjectType, ObjectDef> = {
   },
   waterPump: {
     name: 'Well pump',
-    blurb: 'An electric pump over the old well. Lifts untreated groundwater.',
+    blurb: 'An electric pump over the old well. Lifts untreated groundwater — or use the bucket.',
     draw: 1.5,
     stormVulnerable: true,
   },
@@ -54,7 +54,7 @@ export const OBJECT_DEFS: Record<ObjectType, ObjectDef> = {
   crate: { name: 'Overflow crate', blurb: 'Goods that did not fit in storage. Build racks, then haul them in.' },
   shelf: { name: 'Steel shelving', blurb: 'Bent shelving. Good for scrap.' },
   drums: { name: 'Fuel drums', blurb: 'Two blue drums. One still sloshes.' },
-  table: { name: 'Mess table', blurb: 'Where the group eats.' },
+  table: { name: 'Mess table', blurb: 'Where the group eats. A camp stove on it can boil untreated water.' },
 };
 
 export interface ActionDef {
@@ -285,6 +285,20 @@ export const ACTIONS: Partial<Record<ObjectType, ActionDef[]>> = {
       tools: true,
       result: () => 'Lifts 30 L/h of untreated water while powered (1.5 kW).',
       effect: (s, o) => repaired(s, o, 'The well pump spits rust, then clear water. It needs power to run.'),
+    },
+    {
+      id: 'bucket',
+      kind: 'salvage',
+      label: 'Draw water by hand',
+      states: ['broken', 'operational', 'flooded'],
+      inputs: none,
+      minutes: 40,
+      skill: null,
+      tools: false,
+      outputs: fixed({ rawWater: 10 }),
+      result: () => 'Haul up 10 L of untreated water with a bucket and rope. No power needed.',
+      warning: () => 'Untreated: boil or filter it before drinking.',
+      effect: () => {},
     },
     {
       id: 'dryPump',
@@ -601,6 +615,23 @@ export const ACTIONS: Partial<Record<ObjectType, ActionDef[]>> = {
       result: () => 'Move the goods into storage (needs room).',
       effect: (_s, o) => {
         o.state = 'dismantled';
+      },
+    },
+  ],
+  table: [
+    {
+      id: 'boil',
+      kind: 'craft',
+      label: 'Boil water',
+      states: ['operational'],
+      inputs: fixed({ rawWater: 8, scrap: 1 }),
+      minutes: 60,
+      skill: null,
+      tools: false,
+      outputs: fixed({ water: 7 }),
+      result: () => 'Burn scrap wood under a pot: 8 L untreated becomes 7 L safe to drink.',
+      effect: (s) => {
+        s.stats.cleanWaterMade += 7;
       },
     },
   ],

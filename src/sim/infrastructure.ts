@@ -15,6 +15,8 @@ export const PUMP_RATE = 30; // L/h
 export const SAND_RATE = 5; // L/h
 export const PURIFIER_RATE = 15; // L/h
 export const GROW_HOURS = 36;
+export const BARREL_RAIN = 6; // L/h at full rain
+export const TANK_RAIN = 10;
 
 function ops(state: GameState, type: WorldObject['type']): WorldObject[] {
   return state.objects.filter((o) => o.type === type && o.state === 'operational');
@@ -174,8 +176,11 @@ export function tickWater(state: GameState): void {
   }
   const rain = state.weather.rain;
   if (rain > 0) {
+    // Open barrels by the well always catch some rain; a standing tank catches more; catchers most.
     const catchers = ops(state, 'rainCatcher').length;
-    if (catchers) rawIn += produce(state, { rawWater: (rain * 25 * catchers) / 60 }).rawWater ?? 0;
+    const tank = state.objects.some((o) => o.type === 'waterTank' && (o.state === 'operational' || o.state === 'damaged'));
+    const perHour = rain * (BARREL_RAIN + (tank ? TANK_RAIN : 0) + 25 * catchers);
+    rawIn += produce(state, { rawWater: perHour / 60 }).rawWater ?? 0;
   }
   const treat = (rate: number) => {
     const room = cleanCapacity(state) - count(state, 'water');

@@ -588,6 +588,9 @@ function table(ctx: Ctx, o: WorldObject) {
   for (const [dx, dy] of [[0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) line(ctx, P(o.x + dx, o.y + dy, 0), P(o.x + dx, o.y + dy, 12), '#4d3e2b', 2);
   box(ctx, o.x + 0.08, o.y + 0.08, 0.84, 0.84, 12, 2, WOOD);
   cylinder(ctx, o.x + 0.4, o.y + 0.45, 0.06, 14, 4, '#b8b8b0');
+  // Camp stove and pot for boiling water.
+  cylinder(ctx, o.x + 0.65, o.y + 0.6, 0.15, 14, 3, '#3a3532', '#e0782f');
+  cylinder(ctx, o.x + 0.65, o.y + 0.6, 0.12, 17, 8, '#5d6166', '#2c3f4a');
 }
 
 function depot(ctx: Ctx, o: WorldObject, env: DrawEnv) {
