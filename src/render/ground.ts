@@ -46,9 +46,6 @@ export function paintGround(scale: number): HTMLCanvasElement {
   ctx.scale(scale, scale);
   ctx.translate(GROUND_OX, GROUND_OY);
 
-  // Wasteland beyond the map edge.
-  ctx.fillStyle = '#4a3f32';
-  ctx.fillRect(-GROUND_OX, -GROUND_OY, GROUND_W, GROUND_H);
 
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
@@ -158,9 +155,6 @@ export function paintGround(scale: number): HTMLCanvasElement {
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
   }
-  // Long road leading off-map.
-  ctx.fillStyle = shade('#47454a', -0.05);
-  poly(ctx, [P(32, 15), P(40, 15), P(40, 17), P(32, 17)], '#47454a');
   void HALF_W;
   return c;
 }
