@@ -337,6 +337,45 @@ describe('storm and encounter', () => {
   });
 });
 
+describe('water fallbacks', () => {
+  it('a bucket from the well yields untreated water without power', () => {
+    const s = game();
+    expect(getObject(s, 'pump')!.state).toBe('broken');
+    dispatch(s, { type: 'queueAction', objectId: 'pump', actionId: 'bucket', assigneeId: 's-rusk' });
+    runUntil(s, () => !s.jobs.some((j) => j.actionId === 'bucket'));
+    expect(s.ledger.produced.rawWater).toBe(10);
+  });
+
+  it('boiling at the mess table turns untreated water into drinking water', () => {
+    const s = game();
+    produce(s, { rawWater: 10 });
+    const made = s.stats.cleanWaterMade;
+    dispatch(s, { type: 'queueAction', objectId: 'table', actionId: 'boil', assigneeId: 's-sol' });
+    runUntil(s, () => !s.jobs.some((j) => j.actionId === 'boil'));
+    expect(s.ledger.produced.water).toBe(7);
+    expect(s.stats.cleanWaterMade).toBe(made + 7);
+  });
+
+  it('rain fills the barrels and tank even without rain catchers', () => {
+    const s = game();
+    for (const x of s.survivors) x.autoWork = false;
+    s.minute = s.weather.stormStart;
+    advance(s, 0);
+    runUntil(s, () => s.minute >= s.weather.stormStart + 3 * 60);
+    expect(s.ledger.produced.rawWater ?? 0).toBeGreaterThan(30);
+  });
+
+  it('the pump station always provides untreated water', () => {
+    const s = game();
+    s.locations.pumpStation.loot = {};
+    s.locations.pumpStation.decisionDone = true;
+    dispatch(s, { type: 'expedition', destination: 'pumpStation', members: ['s-june', 's-sol'], packed: { water: 6 }, vehicle: false });
+    const raw = count(s, 'rawWater');
+    runUntil(s, () => !s.survivors.find((x) => x.id === 's-june')!.away, 3000);
+    expect(count(s, 'rawWater')).toBeGreaterThan(raw + 15);
+  });
+});
+
 describe('save / load', () => {
   it('round-trips and stays deterministic', () => {
     const s = game(11);

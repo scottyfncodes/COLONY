@@ -331,6 +331,7 @@ export class UI {
     if (blocked.length) out.push(`<button class="alert warn" data-a="panel" data-v="jobs">${icon('jobs')}${blocked.length} waiting on parts</button>`);
     const sick = presentSurvivors(s).filter((x) => x.sick > 0 || x.injury > 40 || x.health < 40);
     if (sick.length) out.push(`<button class="alert bad" data-a="sel-surv" data-v="${sick[0].id}">${icon('heart')}${sick.length} need care</button>`);
+    if (count(s, 'water') < 10) out.push(`<button class="alert bad" data-a="panel" data-v="stores">${icon('water')}Low water — options</button>`);
     if (s.power.deficit) out.push(`<button class="alert bad" data-a="panel" data-v="stores">${icon('power')}Power short</button>`);
     if (roomFor(s, 'scrap') < 5) out.push(`<button class="alert warn" data-a="panel" data-v="stores">${icon('stores')}Storage full</button>`);
     const away = s.expeditions.filter((e) => e.phase !== 'done');
@@ -617,6 +618,7 @@ export class UI {
       <dt>Clean</dt><dd>${fmt(count(s, 'water'))}/${cleanCapacity(s)} L · +${fmt(s.water.cleanIn, 1)} L/h</dd>
       <dt>Untreated</dt><dd>${fmt(count(s, 'rawWater'))}/${rawCapacity(s)} L · +${fmt(s.water.rawIn, 1)} L/h</dd>
       <dt>Drinking</dt><dd>~${fmt(alive * 3.6, 0)} L/day for ${alive}</dd></dl>`;
+    html += this.waterOptions(s);
     const beds = s.objects.filter((o) => o.type === 'planter');
     html += `<h3>${icon('food')}Food</h3><dl class="stats">
       <dt>Rations</dt><dd>${fmt(count(s, 'food'), 1)} · eating ~${alive}/day</dd>
@@ -626,6 +628,31 @@ export class UI {
       .map((k) => `<div>${icon(k)}<span>${ITEMS[k].name}</span><b>${fmt(count(s, k), 1)}</b></div>`)
       .join('')}</div>`;
     return html;
+  }
+
+  /** Every route to drinking water, with whether it works right now and what it needs. */
+  private waterOptions(s: GameState): string {
+    const find = (t: string) => s.objects.find((o) => o.type === t && o.state !== 'dismantled');
+    const all = (t: string) => s.objects.filter((o) => o.type === t && o.state === 'operational');
+    const pump = find('waterPump');
+    const table = find('table');
+    const raw = count(s, 'rawWater');
+    const rows: { ok: boolean; label: string; note: string; obj?: string }[] = [];
+    rows.push({ ok: !!pump, label: 'Bucket from the well', note: pump ? '10 L untreated per trip, no power' : 'well pump was dismantled', obj: pump?.id });
+    rows.push({
+      ok: !!pump && pump.state === 'operational' && pump.on && pump.powered,
+      label: 'Well pump',
+      note: !pump ? 'dismantled' : pump.state !== 'operational' ? `${pump.state} — repair it` : pump.powered ? '30 L/h untreated' : 'needs power (1.5 kW)',
+      obj: pump?.id,
+    });
+    rows.push({ ok: true, label: 'Rain', note: `barrels and tank catch it when it rains${all('rainCatcher').length ? `, plus ${all('rainCatcher').length} catcher(s)` : ' — catchers collect far more'}` });
+    rows.push({ ok: raw >= 8 && !!table && count(s, 'scrap') >= 1, label: 'Boil at the mess table', note: '8 L untreated + 1 scrap → 7 L safe', obj: table?.id });
+    rows.push({ ok: all('sandFilter').length > 0, label: 'Sand filter', note: all('sandFilter').length ? 'treating automatically' : 'build one: 4 scrap, 1 mech' });
+    rows.push({ ok: all('purifier').length > 0, label: 'Boiler purifier', note: all('purifier').length ? '15 L/h with power' : 'build one: needs power' });
+    rows.push({ ok: true, label: 'Ridge Pump Station', note: 'its hand pump fills containers every visit' });
+    return `<h4>Ways to get drinking water</h4><ul class="wateropts">${rows
+      .map((r) => `<li class="${r.ok ? 'ok' : ''}">${icon(r.ok ? 'check' : 'close')}${r.obj ? `<button class="lnk" data-a="sel-obj" data-v="${r.obj}">${esc(r.label)}</button>` : `<b>${esc(r.label)}</b>`}<span>${esc(r.note)}</span></li>`)
+      .join('')}</ul>`;
   }
 
   // ---------------------------------------------------------------- modals

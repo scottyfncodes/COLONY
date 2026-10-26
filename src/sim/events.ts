@@ -381,7 +381,7 @@ export const EVENTS: EventDef[] = [
     cooldown: 8 * 60,
     when: (s) => count(s, 'water') < 8 && s.water.cleanIn <= 0 && s.minute > at(1, 9),
     fire: (s) => {
-      log(s, `Drinking water is down to ${count(s, 'water').toFixed(0)} L and nothing is treating more.`, 'warn');
+      log(s, `Drinking water is down to ${count(s, 'water').toFixed(0)} L. Bucket water from the well and boil it at the mess table, or build a sand filter.`, 'warn');
       return null;
     },
   },

@@ -429,6 +429,11 @@ export class Renderer {
         this.particles.push({ x: o.x + 0.45, y: o.y + 0.45, z: 40, vx: 0.05, vy: -0.05, vz: 12, life: 0, max: 1.6, size: 3, color: '#e8eef0', kind: 'steam' });
       }
     }
+    for (const j of state.jobs) {
+      if (j.actionId !== 'boil' || j.phase !== 'work' || Math.random() > dt * 6) continue;
+      const o = state.objects.find((x) => x.id === j.targetId);
+      if (o) this.particles.push({ x: o.x + 0.65, y: o.y + 0.6, z: 26, vx: 0.05, vy: -0.05, vz: 12, life: 0, max: 1.6, size: 3, color: '#e8eef0', kind: 'steam' });
+    }
     for (const s of state.survivors) {
       if (s.activity !== 'working' || !s.alive || s.away) continue;
       const job = state.jobs.find((j) => j.id === s.jobId);
