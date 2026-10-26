@@ -6,6 +6,7 @@ import type { GameState, ObjectType, Survivor, WorldObject } from '../sim/types'
 import { box, hash, line, P, poly, rgba, roundRect, shade, type Ctx } from './draw';
 import { Camera, iso, type Vec } from './iso';
 import { GROUND_OX, GROUND_OY, paintGround } from './ground';
+import { FIRES, HAZE, paintOutskirts, type Outskirts } from './outskirts';
 import { drawObject, drawSurvivor, drawVisitor, type DrawEnv } from './sprites';
 
 export type Pick =
@@ -53,6 +54,7 @@ export class Renderer {
   readonly camera = new Camera();
   private ctx: Ctx;
   private ground: HTMLCanvasElement | null = null;
+  private outskirts: Outskirts | null = null;
   private groundScale = 1;
   private dpr = 1;
   private light: HTMLCanvasElement;
@@ -87,6 +89,7 @@ export class Renderer {
       this.groundScale = scale;
       this.ground = paintGround(scale);
     }
+    if (!this.outskirts) this.outskirts = paintOutskirts(1);
   }
 
   snapshot(state: GameState): void {
@@ -152,12 +155,14 @@ export class Renderer {
     this.detectChanges(state);
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = '#2b251e';
+    ctx.fillStyle = HAZE;
     ctx.fillRect(0, 0, cam.width, cam.height);
 
     const shakeX = storm ? Math.sin(t * 23) * 0.6 : 0;
     ctx.setTransform(this.dpr * cam.zoom, 0, 0, this.dpr * cam.zoom, this.dpr * ((-cam.x + shakeX) * cam.zoom + cam.width / 2), this.dpr * (-cam.y * cam.zoom + cam.height / 2));
 
+    const out = this.outskirts;
+    if (out) ctx.drawImage(out.canvas, out.wx, out.wy, out.canvas.width / out.scale, out.canvas.height / out.scale);
     if (this.ground) ctx.drawImage(this.ground, -GROUND_OX, -GROUND_OY, this.ground.width / this.groundScale, this.ground.height / this.groundScale);
 
     // Wet ground sheen during rain.
@@ -417,6 +422,12 @@ export class Renderer {
   }
 
   private updateParticles(state: GameState, env: DrawEnv, dt: number, alpha: number): void {
+    // Smoke columns from fires still smouldering in the ruins.
+    for (const f of FIRES) {
+      if (Math.random() < dt * 5) {
+        this.particles.push({ x: f.x + (Math.random() - 0.5) * 0.4, y: f.y, z: f.z, vx: 0.25 + state.weather.wind * 0.9, vy: -0.25 - state.weather.wind * 0.5, vz: 16 + Math.random() * 8, life: 0, max: 7, size: 7, color: '#3e3630', kind: 'smoke' });
+      }
+    }
     const gen = state.objects.find((o) => o.type === 'generator');
     if (gen && gen.state === 'operational' && gen.data.running && Math.random() < dt * 12) {
       this.particles.push({ x: gen.x + 0.45, y: gen.y + 0.45, z: 62, vx: 0.15 + state.weather.wind * 0.4, vy: -0.1, vz: 14, life: 0, max: 2.4, size: 4, color: '#5a5650', kind: 'smoke' });
@@ -461,7 +472,7 @@ export class Renderer {
       }
     }
     this.particles = this.particles.filter((p) => p.life < p.max);
-    if (this.particles.length > 600) this.particles.splice(0, this.particles.length - 600);
+    if (this.particles.length > 800) this.particles.splice(0, this.particles.length - 800);
     void env;
   }
 
@@ -472,7 +483,7 @@ export class Renderer {
       if (p.kind === 'smoke' || p.kind === 'steam') {
         ctx.fillStyle = rgba(p.color.startsWith('#') ? p.color : '#888888', (1 - k) * (p.kind === 'steam' ? 0.45 : 0.5));
         ctx.beginPath();
-        ctx.arc(s.x, s.y, p.size + k * 10, 0, Math.PI * 2);
+        ctx.arc(s.x, s.y, p.size + k * (p.max > 5 ? 34 : 10), 0, Math.PI * 2);
         ctx.fill();
       } else {
         ctx.fillStyle = rgba(p.color, 1 - k);
@@ -569,6 +580,7 @@ export class Renderer {
       if (o.type === 'purifier' && o.powered) lights.push({ x: o.x + 0.5, y: o.y + 0.9, z: 0, r: 1.2, a: 0.5, warm: '#ffb070' });
       if (o.type === 'forklift' && o.state === 'operational' && !o.data.away) lights.push({ x: o.x + 0.5, y: o.y + 2.2, z: 0, r: 1.8, a: 0.6, warm: '#ffe0a0' });
     }
+    for (const f of FIRES) lights.push({ x: f.x, y: f.y, z: f.z, r: 2.4, a: 0.7, warm: '#ff8a3a' });
     if (powered) {
       // Bare bulbs in the buildings when there's power in the system.
       lights.push({ x: 8.5, y: 7.5, z: 0, r: 4.5, a: 0.8, warm: '#ffd590' }, { x: 7, y: 17.5, z: 0, r: 3.6, a: 0.75, warm: '#ffd590' }, { x: 18, y: 6.5, z: 0, r: 3.4, a: 0.75, warm: '#ffd590' });

@@ -26,7 +26,7 @@ export class Camera {
   zoom = 1;
   width = 1;
   height = 1;
-  minZoom = 0.45;
+  minZoom = 0.35;
   maxZoom = 2.4;
 
   toScreen(wx: number, wy: number): Vec {
@@ -65,7 +65,7 @@ export class Camera {
   }
 
   clamp(): void {
-    this.x = Math.max(-1000, Math.min(1000, this.x));
-    this.y = Math.max(40, Math.min(1000, this.y));
+    this.x = Math.max(-1350, Math.min(1350, this.x));
+    this.y = Math.max(-180, Math.min(1250, this.y));
   }
 }
