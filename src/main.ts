@@ -8,6 +8,23 @@ import { Renderer, type ViewState } from './render/renderer';
 import { injectIcons } from './ui/icons';
 import { UI, type Controller, type ModalKind, type PanelKind } from './ui/ui';
 
+/** localStorage can be missing or throw (private mode, sandboxed frames); fall back to memory. */
+const store: Storage = (() => {
+  try {
+    const ls = window.localStorage;
+    ls.setItem('colony.probe', '1');
+    ls.removeItem('colony.probe');
+    return ls;
+  } catch {
+    const mem = new Map<string, string>();
+    return {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => void mem.set(k, v),
+      removeItem: (k: string) => void mem.delete(k),
+    } as Storage;
+  }
+})();
+
 class Game implements Controller {
   state: GameState;
   view: ViewState = { selectedSurvivor: null, selectedObject: null, ghost: null, hover: null };
@@ -25,7 +42,7 @@ class Game implements Controller {
   private lastSave = 0;
 
   constructor(private root: HTMLElement, canvas: HTMLCanvasElement) {
-    const loaded = loadFrom(localStorage);
+    const loaded = loadFrom(store);
     let note = '';
     if (loaded.ok) {
       this.state = loaded.state;
@@ -53,7 +70,7 @@ class Game implements Controller {
   }
 
   save(): void {
-    const ok = saveTo(localStorage, this.state);
+    const ok = saveTo(store, this.state);
     this.saveStatus = ok ? 'Autosaved to this browser' : 'Saving unavailable (private mode?)';
   }
 
@@ -179,7 +196,7 @@ class Game implements Controller {
   }
 
   newGame(): void {
-    clearSave(localStorage);
+    clearSave(store);
     this.state = newGame();
     this.view = { selectedSurvivor: null, selectedObject: null, ghost: null, hover: null };
     this.panel = null;

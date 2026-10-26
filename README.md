@@ -21,6 +21,7 @@ npm run dev        # http://localhost:5173
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run e2e` | Browser end-to-end run at desktop and iPhone sizes (needs `npm run build` first and Playwright's Chromium) |
 | `npm run check` | typecheck + lint + tests + build |
+| `npm run build:single` | One self-contained HTML file (`dist-single/`), plus a page fragment for publishing as a claude.ai Artifact |
 
 `dist/` is a static site; it can be hosted anywhere (Vercel, Netlify, GitHub Pages). Asset paths are relative.
 

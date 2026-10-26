@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:single": "vite build --mode single",
+    "build:single": "vite build --mode single && python3 scripts/artifact.py dist-single/index.html dist-single/colony-artifact.html",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
