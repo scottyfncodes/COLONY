@@ -618,6 +618,144 @@ function depot(ctx: Ctx, o: WorldObject, env: DrawEnv) {
   }
 }
 
+function rubble(ctx: Ctx, o: WorldObject) {
+  if (o.state === 'dismantled') return;
+  const seed = strHash(o.id);
+  const n = 6 + o.w * o.h * 5;
+  shadow(ctx, o.x + o.w / 2, o.y + o.h / 2, 22 * o.w, 10 * o.h, 0.3);
+  for (let i = 0; i < n; i++) {
+    const u = 0.1 + hash(seed, i) * (o.w - 0.35);
+    const v = 0.1 + hash(seed, i, 1) * (o.h - 0.35);
+    const sz = 0.2 + hash(seed, i, 2) * 0.32;
+    const z = hash(seed, i, 3) * 10 * (1 - Math.abs(v / o.h - 0.5));
+    box(ctx, o.x + u, o.y + v, sz, sz * 0.8, z, 4 + hash(seed, i, 4) * 9, i % 4 === 0 ? '#9a948a' : i % 4 === 1 ? '#7d776e' : '#8a8378');
+  }
+  for (let i = 0; i < 3; i++) {
+    const p = P(o.x + 0.2 + hash(seed, i, 5) * (o.w - 0.4), o.y + o.h * 0.6, 10);
+    line(ctx, p, { x: p.x + (hash(seed, i, 6) - 0.5) * 18, y: p.y - 12 - hash(seed, i, 7) * 10 }, '#4a3a30', 1.4);
+  }
+  if (o.data.trapped) {
+    // A hand reaching out of the rubble.
+    const p = P(o.x + 0.75, o.y + 0.85, 6);
+    ctx.fillStyle = '#9b6b4b';
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, 3, 2, -0.6, 0, Math.PI * 2);
+    ctx.fill();
+    line(ctx, { x: p.x - 4, y: p.y + 2 }, p, '#8a8f96', 3);
+  }
+}
+
+function barricade(ctx: Ctx, o: WorldObject) {
+  if (o.state === 'dismantled') return;
+  for (let i = 0; i < 5; i++) {
+    const u = o.x + 0.15 + i * ((o.w - 0.3) / 4);
+    line(ctx, P(u, o.y + 0.5, 0), P(u + 0.15, o.y + 0.2, 26), '#6b4a2e', 3);
+  }
+  poly(ctx, [P(o.x + 0.05, o.y + 0.55, 4), P(o.x + o.w - 0.05, o.y + 0.55, 4), P(o.x + o.w - 0.05, o.y + 0.55, 18), P(o.x + 0.05, o.y + 0.55, 18)], '#5a6a72', '#2a3236');
+  poly(ctx, [P(o.x + 0.3, o.y + 0.6, 10), P(o.x + 1, o.y + 0.6, 6), P(o.x + 1, o.y + 0.6, 22), P(o.x + 0.3, o.y + 0.6, 26)], '#8a4a2a', '#3a2016');
+  for (let i = 0; i < 4; i++) {
+    const p = P(o.x + 0.3 + i * 0.45, o.y + 0.5, 22);
+    line(ctx, p, { x: p.x + 6, y: p.y - 10 }, '#9a8a6a', 2);
+  }
+  if (o.reinforced) line(ctx, P(o.x, o.y + 0.55, 14), P(o.x + o.w, o.y + 0.55, 14), '#c9c9c9', 1.2);
+}
+
+function levee(ctx: Ctx, o: WorldObject) {
+  if (o.state === 'dismantled') return;
+  ctx.strokeStyle = '#6e603f';
+  ctx.lineWidth = 0.7;
+  for (let k = 0; k < 3; k++) {
+    for (let i = 0; i <= o.w * 3 - k; i++) {
+      const p = P(o.x + 0.15 + i / 3 + k * 0.15, o.y + 0.55, 3 + k * 5.5);
+      ctx.fillStyle = k % 2 ? '#b09a6e' : '#a08e66';
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 7, 3.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+
+function infirmary(ctx: Ctx, o: WorldObject, env: DrawEnv) {
+  if (o.state === 'dismantled') return;
+  cot(ctx, o);
+  // Plastic sheeting on a frame
+  for (const [dx, dy] of [[0.05, 0.05], [0.95, 0.05], [0.05, 0.95], [0.95, 0.95]]) line(ctx, P(o.x + dx, o.y + dy, 0), P(o.x + dx, o.y + dy, 34), '#9aa0a5', 1.2);
+  poly(ctx, [P(o.x + 0.05, o.y + 0.95, 2), P(o.x + 0.95, o.y + 0.95, 2), P(o.x + 0.95, o.y + 0.95, 34), P(o.x + 0.05, o.y + 0.95, 34)], 'rgba(220,235,240,0.18)', 'rgba(220,235,240,0.4)');
+  poly(ctx, [P(o.x + 0.95, o.y + 0.05, 2), P(o.x + 0.95, o.y + 0.95, 2), P(o.x + 0.95, o.y + 0.95, 34), P(o.x + 0.95, o.y + 0.05, 34)], 'rgba(220,235,240,0.14)', 'rgba(220,235,240,0.35)');
+  const c = P(o.x + 0.95, o.y + 0.5, 26);
+  ctx.fillStyle = '#d33';
+  ctx.fillRect(c.x - 4, c.y - 1.5, 8, 3);
+  ctx.fillRect(c.x - 1.5, c.y - 4, 3, 8);
+  light(ctx, o.x + 0.5, o.y + 0.1, 30, '#ffb070', o.powered, 1.6);
+  void env;
+}
+
+/** Flames licking up from a burning object. */
+export function drawFire(ctx: Ctx, o: WorldObject, t: number, height: number) {
+  const base = iso(o.x + o.w / 2, o.y + o.h / 2, height * 0.4);
+  for (let i = 0; i < 5; i++) {
+    const ph = t * 6 + i * 1.7;
+    const fx = base.x + (i - 2) * 6 + Math.sin(ph) * 2;
+    const fh = 14 + Math.sin(ph * 1.3) * 5 + (i % 2) * 6;
+    const g = ctx.createLinearGradient(fx, base.y, fx, base.y - fh);
+    g.addColorStop(0, 'rgba(255,200,80,0.95)');
+    g.addColorStop(0.5, 'rgba(255,120,30,0.85)');
+    g.addColorStop(1, 'rgba(200,40,10,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(fx - 5, base.y);
+    ctx.quadraticCurveTo(fx - 4, base.y - fh * 0.6, fx, base.y - fh);
+    ctx.quadraticCurveTo(fx + 4, base.y - fh * 0.6, fx + 5, base.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+/** One of the infected: hunched, arms out, shuffling. */
+export function drawInfected(ctx: Ctx, x: number, y: number, t: number, i: number): void {
+  const p = iso(x, y);
+  const sway = Math.sin(t * 1.6 + i) * 1.5;
+  const lurch = Math.abs(Math.sin(t * 1.6 + i)) * 1.2;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.fillStyle = 'rgba(10,8,6,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 7, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#2a2622';
+  ctx.lineWidth = 2.6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-2, -8);
+  ctx.lineTo(-3 + sway, -1);
+  ctx.moveTo(2, -8);
+  ctx.lineTo(2 - sway, -1);
+  ctx.stroke();
+  const shirts = ['#4a463c', '#5a4a3a', '#3e4a50', '#6a5a4a'];
+  ctx.fillStyle = shirts[i % shirts.length];
+  ctx.beginPath();
+  ctx.moveTo(-5, -8);
+  ctx.lineTo(5, -8);
+  ctx.lineTo(6 + lurch, -19);
+  ctx.lineTo(-3 + lurch, -20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#7d8a6a';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(3 + lurch, -18);
+  ctx.lineTo(12 + lurch, -16 + sway);
+  ctx.moveTo(0 + lurch, -18);
+  ctx.lineTo(9 + lurch, -14 - sway);
+  ctx.stroke();
+  ctx.fillStyle = '#8a9676';
+  ctx.beginPath();
+  ctx.arc(3 + lurch * 1.5, -23, 4.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function site(ctx: Ctx, o: WorldObject, env: DrawEnv, progress: number) {
   const bp = blueprint(o.label as WorldObject['type']);
   groundQuad(ctx, o.x, o.y, o.w, o.h, 'rgba(232,163,61,0.12)', 'rgba(232,163,61,0.7)');
@@ -657,6 +795,10 @@ function drawObjectBody(ctx: Ctx, o: WorldObject, env: DrawEnv): void {
     case 'drums': return drums(ctx, o);
     case 'table': return table(ctx, o);
     case 'depot': return depot(ctx, o, env);
+    case 'rubble': return rubble(ctx, o);
+    case 'barricade': return barricade(ctx, o);
+    case 'levee': return levee(ctx, o);
+    case 'infirmary': return infirmary(ctx, o, env);
   }
 }
 
@@ -664,6 +806,7 @@ export function drawObject(ctx: Ctx, o: WorldObject, env: DrawEnv, siteProgress 
   if (o.state === 'site') return site(ctx, o, env, siteProgress);
   if (o.type !== 'gate' && o.state !== 'dismantled') shadow(ctx, o.x + o.w / 2 + 0.15, o.y + o.h / 2 + 0.1, 20 * Math.max(o.w, o.h), 10 * Math.min(o.w, o.h) + 3, 0.18, 6);
   drawObjectBody(ctx, o, env);
+  if (o.data.burning) drawFire(ctx, o, env.t, 30);
 }
 
 // ---------------------------------------------------------------- survivors
@@ -711,6 +854,19 @@ export function drawSurvivor(ctx: Ctx, s: Survivor, pos: SurvivorPose, env: Draw
   ctx.ellipse(0, 0, 8, 4, 0, 0, Math.PI * 2);
   ctx.fill();
 
+  if (s.activity === 'trapped') {
+    ctx.translate(0, -4);
+    ctx.fillStyle = s.look.shirt;
+    ctx.beginPath();
+    ctx.ellipse(-4, 0, 9, 3.6, -0.45, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = s.look.skin;
+    ctx.beginPath();
+    ctx.arc(-12, 3, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
   if (sleeping) {
     // Lying down on a cot or the floor.
     ctx.translate(0, -9);
@@ -814,9 +970,9 @@ export function drawSurvivor(ctx: Ctx, s: Survivor, pos: SurvivorPose, env: Draw
     ctx.strokeRect(-4, torsoTop - 12, 8, 6);
   }
   // Need alert pip
-  const critical = s.thirst < 15 || s.hunger < 15 || s.health < 30 || s.sick > 0 || s.injury > 40;
+  const critical = s.thirst < 15 || s.hunger < 15 || s.health < 30 || s.sick > 0 || s.injury > 40 || s.illness?.stage === 'sick' || s.illness?.kind === 'bite' || s.dose > 100;
   if (critical) {
-    ctx.fillStyle = '#e8503a';
+    ctx.fillStyle = s.illness?.kind === 'bite' ? '#a01818' : s.illness?.kind === 'fever' && s.illness.stage === 'sick' ? '#e8862a' : s.dose > 100 ? '#a8b83a' : '#e8503a';
     ctx.beginPath();
     ctx.arc(7, hy - 7, 3, 0, Math.PI * 2);
     ctx.fill();

@@ -1,5 +1,9 @@
 import { count, log } from './inventory';
-import type { GameState, Items, JobKind, ObjectType, Skill, WorldObject } from './types';
+import type { CatastropheId, GameState, Items, JobKind, ObjectType, Skill, WorldObject } from './types';
+
+export function activeCatastrophe(s: GameState, id: CatastropheId): boolean {
+  return s.world.catastrophe === id || s.world.extra.includes(id);
+}
 
 // Data-driven catalogue of world objects, what can be done to them, and what can be built.
 // Every action has explicit inputs, labour, skill, and an effect on persistent state.
@@ -54,6 +58,10 @@ export const OBJECT_DEFS: Record<ObjectType, ObjectDef> = {
   crate: { name: 'Overflow crate', blurb: 'Goods that did not fit in storage. Build racks, then haul them in.' },
   shelf: { name: 'Steel shelving', blurb: 'Bent shelving. Good for scrap.' },
   drums: { name: 'Fuel drums', blurb: 'Two blue drums. One still sloshes.' },
+  rubble: { name: 'Rubble', blurb: 'Broken concrete and twisted steel brought down by the quake.' },
+  barricade: { name: 'Barricade', blurb: 'Welded car doors, pallets and spikes. Adds to the compound’s defence.' },
+  levee: { name: 'Sandbag levee', blurb: 'Bags of soil stacked against the creek. Two or more keep floodwater off the low ground.' },
+  infirmary: { name: 'Isolation bed', blurb: 'A cot behind plastic sheeting. Quarantined patients rest here without infecting anyone; with power it runs a heater and treatment goes better.', draw: 0.5 },
   table: { name: 'Mess table', blurb: 'Where the group eats. A camp stove on it can boil untreated water.' },
 };
 
@@ -630,12 +638,62 @@ export const ACTIONS: Partial<Record<ObjectType, ActionDef[]>> = {
       tools: false,
       outputs: fixed({ water: 7 }),
       result: () => 'Burn scrap wood under a pot: 8 L untreated becomes 7 L safe to drink.',
+      blocked: (s) => (activeCatastrophe(s, 'fallout') ? 'Boiling won’t remove fallout. Filter it.' : null),
       effect: (s) => {
         s.stats.cleanWaterMade += 7;
       },
     },
   ],
   shelf: [dismantle(fixed({ scrap: 2 }), 30, null, false)],
+  rubble: [
+    {
+      id: 'digOut',
+      kind: 'clear',
+      label: 'Dig them out',
+      states: ['pile'],
+      inputs: none,
+      minutes: 90,
+      skill: 'construction',
+      tools: false,
+      outputs: fixed({ scrap: 2 }),
+      result: (s, o) => {
+        const who = s.survivors.find((x) => x.trapped && Math.floor(x.x) === o.x && Math.floor(x.y) === o.y);
+        return who ? `${who.name} is pinned underneath. Every hour counts.` : 'Someone is pinned underneath.';
+      },
+      visible: (_s, o) => !!o.data.trapped,
+      effect: (s, o) => {
+        o.state = 'dismantled';
+        const who = s.survivors.find((x) => x.trapped && Math.floor(x.x) === o.x && Math.floor(x.y) === o.y);
+        if (who) {
+          who.trapped = false;
+          who.activity = 'idle';
+          who.morale = Math.min(100, who.morale + 15);
+          for (const x of s.survivors) if (x.alive && x !== who) x.morale = Math.min(100, x.morale + 8);
+          log(s, `${who.name} is pulled from the rubble, bruised but alive.`, 'good');
+        }
+      },
+    },
+    {
+      id: 'clearRubble',
+      kind: 'clear',
+      label: 'Clear rubble',
+      states: ['pile'],
+      inputs: none,
+      minutes: 80,
+      skill: 'construction',
+      tools: false,
+      outputs: (_s, o) => ({ scrap: 2 * o.w * o.h }),
+      result: () => 'Break it up and haul the steel to storage. A working forklift makes this much faster.',
+      visible: (_s, o) => !o.data.trapped,
+      effect: (s, o) => {
+        o.state = 'dismantled';
+        log(s, 'Rubble cleared.', 'info');
+      },
+    },
+  ],
+  barricade: [reinforce(3, 60), dismantle(fixed({ scrap: 3 }), 40, null, false)],
+  levee: [dismantle(fixed({ scrap: 1 }), 30, null, false)],
+  infirmary: [dismantle(fixed({ scrap: 2 }), 30, null, false)],
   drums: [
     {
       id: 'drain',
@@ -669,6 +727,10 @@ export interface Blueprint {
   initialState: string;
   blurb: string;
   needsTools: boolean;
+  /** Catastrophes that make this blueprint available; omitted = always. */
+  scenarios?: CatastropheId[];
+  /** Placement rule beyond the usual checks; returns a reason or null. */
+  zone?: (x: number, y: number) => string | null;
 }
 
 export const BLUEPRINTS: Blueprint[] = [
@@ -679,6 +741,9 @@ export const BLUEPRINTS: Blueprint[] = [
   { type: 'purifier', name: 'Boiler purifier', w: 1, h: 1, inputs: { scrap: 3, elec: 2, mech: 1 }, minutes: 210, initialState: 'operational', blurb: 'Treats 15 L/h. Draws 2 kW.', needsTools: true },
   { type: 'storageRack', name: 'Storage rack', w: 2, h: 1, inputs: { scrap: 4 }, minutes: 75, initialState: 'operational', blurb: '+40 general storage.', needsTools: false },
   { type: 'windTurbine', name: 'Wind turbine', w: 1, h: 1, inputs: { scrap: 6, mech: 2, elec: 2 }, minutes: 300, initialState: 'operational', blurb: 'Fuel-free power that varies with the wind. Strong storm winds will wreck it unless reinforced.', needsTools: true },
+  { type: 'barricade', name: 'Barricade', w: 2, h: 1, inputs: { scrap: 4 }, minutes: 90, initialState: 'operational', blurb: 'Raises the compound’s defence against raiders and the infected. Most useful near the fence.', needsTools: false, scenarios: ['collapse', 'outbreak'] },
+  { type: 'levee', name: 'Sandbag levee', w: 2, h: 1, inputs: { scrap: 1 }, minutes: 60, initialState: 'operational', blurb: 'Two or more on the low ground keep the flood off the growing plot and out of the well.', needsTools: false, scenarios: ['quake'], zone: (_x, y) => (y >= 20 ? null : 'Levees go on the low ground in the south of the compound.') },
+  { type: 'infirmary', name: 'Isolation bed', w: 1, h: 1, inputs: { scrap: 3 }, minutes: 60, initialState: 'operational', blurb: 'Quarantined patients rest here without spreading illness. Powered (0.5 kW), treatment works better.', needsTools: false, scenarios: ['pandemic', 'outbreak'] },
   { type: 'lamp', name: 'Work lamp', w: 1, h: 1, inputs: { scrap: 2, elec: 1 }, minutes: 60, initialState: 'operational', blurb: 'Lights the area at night. Draws 0.3 kW.', needsTools: false },
 ];
 
@@ -686,11 +751,31 @@ export function blueprint(type: ObjectType): Blueprint | undefined {
   return BLUEPRINTS.find((b) => b.type === type);
 }
 
+/** Any burning object can be doused; this is offered on top of its normal actions. */
+export const DOUSE: ActionDef = {
+  id: 'douse',
+  kind: 'repair',
+  label: 'Put out the fire',
+  states: ['operational', 'broken', 'damaged', 'flooded', 'growing', 'ready', 'empty', 'intact', 'laid', 'stripped', 'wreck', 'siphoned', 'overgrown', 'pile'],
+  inputs: (s) => (count(s, 'rawWater') >= 10 ? { rawWater: 10 } : { water: 10 }),
+  minutes: 25,
+  skill: null,
+  tools: false,
+  result: () => 'Throw 10 L of water on it before it burns out. Untreated water is used first.',
+  visible: (_s, o) => !!o.data.burning,
+  effect: (s, o) => {
+    o.data.burning = 0;
+    log(s, `Fire on the ${OBJECT_DEFS[o.type].name.toLowerCase()} put out.`, 'good');
+  },
+};
+
 export function actionsFor(o: WorldObject): ActionDef[] {
-  return ACTIONS[o.type] ?? [];
+  const base = ACTIONS[o.type] ?? [];
+  return o.data.burning ? [DOUSE, ...base] : base;
 }
 
 export function findAction(o: WorldObject, id: string): ActionDef | undefined {
+  if (id === 'douse') return DOUSE;
   return actionsFor(o).find((a) => a.id === id);
 }
 

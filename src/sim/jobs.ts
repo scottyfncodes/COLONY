@@ -105,7 +105,9 @@ export function queueTreat(state: GameState, patientId: string, assigneeId: stri
   if (!p || !p.alive) return { ok: false, message: 'No patient.' };
   if (p.away) return { ok: false, message: `${p.name} is away.` };
   if (state.jobs.some((j) => j.kind === 'treat' && j.targetId === patientId)) return { ok: false, message: 'Treatment already queued.' };
-  if (p.injury < 1 && p.sick <= 0 && p.health > 80) return { ok: false, message: `${p.name} doesn't need treatment.` };
+  const fever = p.illness?.kind === 'fever' && p.illness.stage === 'sick';
+  const bite = p.illness?.kind === 'bite';
+  if (p.injury < 1 && p.sick <= 0 && p.health > 80 && !fever && !bite && p.dose < 80) return { ok: false, message: `${p.name} doesn't need treatment.` };
   const job: Job = {
     id: newId(state, 'j'),
     kind: 'treat',
@@ -116,8 +118,8 @@ export function queueTreat(state: GameState, patientId: string, assigneeId: stri
     preferredId: null,
     phase: 'queued',
     progress: 0,
-    required: 60,
-    inputs: { meds: 1 },
+    required: bite ? 90 : 60,
+    inputs: { meds: bite ? 2 : 1 },
     needsTools: false,
     staged: {},
     skill: 'medical',
@@ -231,6 +233,13 @@ export function workRate(state: GameState, s: Survivor, job: Job): number {
   let r = job.skill ? 0.45 + 0.35 * lvl : 1;
   if (s.trait === 'steady' && (job.kind === 'repair' || job.kind === 'service')) r *= 1.2;
   if (s.health < 50) r *= 0.7;
+  if (s.illness?.stage === 'sick') r *= 0.5;
+  else if (s.illness) r *= 0.9;
+  if (s.dose > 100) r *= 0.8;
+  // Machinery that clears rubble also stacks sandbags.
+  if (job.actionId === 'clearRubble' || job.actionId === 'digOut' || (job.kind === 'build' && getObject(state, job.targetId)?.label === 'levee')) {
+    if (state.objects.some((o) => o.type === 'forklift' && o.state === 'operational' && !o.data.away)) r *= 1.7;
+  }
   if (s.injury > 40) r *= 0.7;
   if (s.sick > 0) r *= 0.75;
   if (s.energy < 25) r *= 0.75;
@@ -261,7 +270,26 @@ export function completeJob(state: GameState, job: Job, worker: Survivor): void 
       p.sick = skill >= 3 ? 0 : Math.max(0, p.sick - 12 * 60);
       p.health = Math.min(100, p.health + (skill >= 3 ? 25 : 12));
       p.morale = Math.min(100, p.morale + 5);
-      log(state, `${worker.name.split(' ')[0]} treated ${p.name.split(' ')[0]}.`, 'good');
+      const notes: string[] = [];
+      if (p.dose > 0) {
+        const before = p.dose;
+        p.dose = Math.max(0, p.dose - (skill >= 3 ? 80 : 45));
+        if (before >= 80) notes.push('radiation sickness eased');
+      }
+      if (p.illness?.kind === 'fever' && p.illness.stage === 'sick') {
+        const bed = state.objects.find((o) => o.id === p.need?.bedId && o.type === 'infirmary');
+        p.illness.t = Math.floor(p.illness.t * (bed?.powered ? 0.3 : bed ? 0.45 : 0.6));
+        notes.push(bed?.powered ? 'fever treated in a heated isolation bed' : 'fever eased');
+      } else if (p.illness?.kind === 'bite') {
+        if (p.illness.stage === 'incubating' || chance(state, skill >= 3 ? 0.75 : 0.4)) {
+          p.illness = null;
+          notes.push('bite cleaned and cauterised');
+        } else {
+          p.illness.t += 12 * 60;
+          notes.push('the infection is slowed, not stopped');
+        }
+      }
+      log(state, `${worker.name.split(' ')[0]} treated ${p.name.split(' ')[0]}${notes.length ? `: ${notes.join(', ')}` : ''}.`, 'good');
     }
   } else if (job.kind === 'build') {
     const site = getObject(state, job.targetId);

@@ -6,13 +6,23 @@ import { startExpedition, tickExpeditions } from './expeditions';
 import { resolveEvent, runEvents } from './events';
 import { evaluateEnd, updateObjectives } from './scenario';
 import { createGame } from './setup';
-import { aliveSurvivors, tickSurvivor } from './survivors';
+import { applyScenario, CATASTROPHE_IDS, isActive, setPlacementCheck, tickWorld, type NewGameOptions } from './catastrophes';
+import { tickDirector } from './director';
+import { runSandbox } from './sandbox';
+import { hashNoise } from './rng';
+import { aliveSurvivors, endQuarantine, spreadIllness, tickSurvivor } from './survivors';
 import { END_MINUTE } from './time';
 import { accessTiles, GATE_INSIDE, GATE_TILES, inCompound, occupancy, reachable, MAP_W, walkable } from './world';
 import type { Command, CommandResult, GameState, ObjectType, WorldObject } from './types';
 
-export function newGame(seed = Date.now() % 100000): GameState {
+export function newGame(seed = Date.now() % 100000, opts?: Partial<NewGameOptions>): GameState {
   const s = createGame(seed);
+  const o: NewGameOptions = { catastrophe: 'storm', difficulty: 'normal', mode: 'survival', ...opts };
+  if (o.random) {
+    // Random scenario: any catastrophe, chosen from the seed.
+    o.catastrophe = CATASTROPHE_IDS[Math.floor(hashNoise(seed, 97) * CATASTROPHE_IDS.length)];
+  }
+  applyScenario(s, o);
   runEvents(s);
   return s;
 }
@@ -29,11 +39,14 @@ export function step(state: GameState): void {
   tickPower(state);
   tickWater(state);
   tickCrops(state);
+  tickWorld(state);
   autoJobs(state);
   const occ = occupancy(state);
   for (const s of state.survivors) tickSurvivor(state, s, occ);
+  spreadIllness(state);
   tickExpeditions(state);
   runEvents(state);
+  if (!state.events.pending) tickDirector(state);
   if (state.minute % 10 === 0) updateObjectives(state);
   if (aliveSurvivors(state).length === 0) {
     state.result = evaluateEnd(state, true);
@@ -52,9 +65,26 @@ export function advance(state: GameState, minutes: number): void {
 export function validatePlacement(state: GameState, type: ObjectType, x: number, y: number): string | null {
   const bp = blueprint(type);
   if (!bp) return 'Unknown blueprint.';
+  if (bp.scenarios && !blueprintAvailable(state, type)) return 'Not needed in this scenario.';
+  if (bp.zone) {
+    const why = bp.zone(x, y);
+    if (why) return why;
+  }
+  return footprintBlocked(state, bp.w, bp.h, x, y);
+}
+
+export function blueprintAvailable(state: GameState, type: ObjectType): boolean {
+  const bp = blueprint(type);
+  if (!bp) return false;
+  if (!bp.scenarios) return true;
+  return bp.scenarios.some((c) => isActive(state, c)) || (state.world.mode === 'sandbox' && state.world.extra.length > 0 && bp.scenarios.some((c) => state.world.extra.includes(c)));
+}
+
+/** Can a w×h footprint go here without blocking anything? Returns a reason or null. */
+export function footprintBlocked(state: GameState, w: number, h: number, x: number, y: number): string | null {
   const occ = occupancy(state);
-  for (let ty = y; ty < y + bp.h; ty++) {
-    for (let tx = x; tx < x + bp.w; tx++) {
+  for (let ty = y; ty < y + h; ty++) {
+    for (let tx = x; tx < x + w; tx++) {
       if (!inCompound(tx, ty)) return 'Must be inside the fence.';
       if (!walkable(occ, tx, ty)) return 'Something is in the way.';
       if (GATE_TILES.some((g) => g.x === tx && g.y === ty)) return 'Keep the gate clear.';
@@ -62,9 +92,9 @@ export function validatePlacement(state: GameState, type: ObjectType, x: number,
     }
   }
   // Placing must not cut off any part of the compound.
-  for (let ty = y; ty < y + bp.h; ty++) for (let tx = x; tx < x + bp.w; tx++) occ[ty * MAP_W + tx] = 2;
+  for (let ty = y; ty < y + h; ty++) for (let tx = x; tx < x + w; tx++) occ[ty * MAP_W + tx] = 2;
   const reach = reachable(occ, GATE_INSIDE);
-  const site = { x, y, w: bp.w, h: bp.h };
+  const site = { x, y, w, h };
   if (!accessTiles(occ, site).some((p) => reach[p.y * MAP_W + p.x])) return 'Nobody could reach it there.';
   for (const o of state.objects) {
     if (o.state === 'dismantled' || o.type === 'gate' || o.type === 'shelf' || o.type === 'table') continue;
@@ -75,11 +105,13 @@ export function validatePlacement(state: GameState, type: ObjectType, x: number,
     if (!s.alive || s.away) continue;
     const tx = Math.floor(s.x);
     const ty = Math.floor(s.y);
-    if (tx >= x && tx < x + bp.w && ty >= y && ty < y + bp.h) continue; // they'll step aside
+    if (tx >= x && tx < x + w && ty >= y && ty < y + h) continue; // they'll step aside
     if (walkable(occ, tx, ty) && !reach[ty * MAP_W + tx]) return 'That would trap someone.';
   }
   return null;
 }
+
+setPlacementCheck((s, w, h, x, y) => footprintBlocked(s, w, h, x, y) === null);
 
 function placeSite(state: GameState, type: ObjectType, x: number, y: number): WorldObject {
   const bp = blueprint(type)!;
@@ -162,6 +194,24 @@ export function dispatch(state: GameState, cmd: Command): CommandResult {
       return startExpedition(state, cmd.destination, cmd.members, cmd.packed, cmd.vehicle);
     case 'choose':
       return resolveEvent(state, cmd.choiceId);
+    case 'quarantine': {
+      const s = getSurvivor(state, cmd.survivorId);
+      if (!s || !s.alive) return { ok: false, message: 'Nobody to isolate.' };
+      if (s.away) return { ok: false, message: `${s.name} is away.` };
+      if (s.trapped) return { ok: false, message: `${s.name} is trapped.` };
+      if (cmd.value === s.quarantined) return { ok: true, message: '' };
+      if (cmd.value) {
+        s.quarantined = true;
+        const job = state.jobs.find((j) => j.id === s.jobId);
+        if (job) assignJob(state, job.id, null);
+        s.need = null;
+        return { ok: true, message: `${s.name.split(' ')[0]} is going into quarantine.` };
+      }
+      endQuarantine(state, s);
+      return { ok: true, message: `${s.name.split(' ')[0]} is back on their feet.` };
+    }
+    case 'sandbox':
+      return runSandbox(state, cmd.action);
   }
 }
 

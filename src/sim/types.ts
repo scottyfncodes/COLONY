@@ -47,6 +47,7 @@ export type Activity =
   | 'fetching'
   | 'sheltering'
   | 'away'
+  | 'trapped'
   | 'dead';
 
 export type NeedKind = 'eat' | 'drink' | 'sleep' | 'shelter';
@@ -91,6 +92,23 @@ export interface Survivor {
   joinedDay: number;
   sleptInBed: boolean;
   lastAte: number;
+  /** Accumulated radiation dose (fallout). */
+  dose: number;
+  /** Contagious fever or an infected bite. */
+  illness: Illness | null;
+  /** Pinned under rubble and unable to move until dug out. */
+  trapped: boolean;
+  /** Isolated in the infirmary: does not work, does not spread illness. */
+  quarantined: boolean;
+  /** Recovered from the fever; cannot catch it again. */
+  immune?: boolean;
+}
+
+export interface Illness {
+  kind: 'fever' | 'bite';
+  stage: 'incubating' | 'sick';
+  /** Minutes remaining in the current stage. */
+  t: number;
 }
 
 export type ObjectType =
@@ -117,7 +135,11 @@ export type ObjectType =
   | 'crate'
   | 'shelf'
   | 'drums'
-  | 'table';
+  | 'table'
+  | 'rubble'
+  | 'barricade'
+  | 'levee'
+  | 'infirmary';
 
 export interface WorldObject {
   id: string;
@@ -190,7 +212,7 @@ export interface Weather {
   stormEnd: number;
   stormForecastKnown: boolean;
   stormResolved: boolean;
-  rainWindows: { start: number; end: number }[];
+  rainWindows: { start: number; end: number; heavy?: number }[];
 }
 
 export type LocationId = 'garage' | 'market' | 'pumpStation';
@@ -263,6 +285,49 @@ export interface ScenarioResult {
   objectives: { id: string; label: string; done: boolean }[];
 }
 
+export type CatastropheId = 'storm' | 'quake' | 'collapse' | 'pandemic' | 'fallout' | 'outbreak';
+export type Difficulty = 'easy' | 'normal' | 'hard';
+export type GameMode = 'survival' | 'sandbox';
+export type ClimaxKind = 'storm' | 'raid' | 'horde';
+
+/** A queued follow-up from the event director (a warning now, consequences later). */
+export interface DirectorPending {
+  id: string;
+  at: number;
+  data: Record<string, string | number>;
+}
+
+/** Catastrophe-driven world conditions shared by every system. */
+export interface WorldConditions {
+  catastrophe: CatastropheId;
+  /** Further catastrophes layered on in sandbox mode. */
+  extra: CatastropheId[];
+  difficulty: Difficulty;
+  mode: GameMode;
+  random: boolean;
+  /** Outdoor radiation in mSv per hour (fallout). */
+  radiation: number;
+  /** Infected massing outside the fence, 0–100 (outbreak). */
+  horde: number;
+  /** Recent noise from machinery and work, 0–100. Attracts the infected. */
+  noise: number;
+  /** Hostility of rival groups, 0–100 (collapse). */
+  threat: number;
+  /** Floodwater depth over the low ground, 0–100. */
+  flood: number;
+  routes: Partial<Record<LocationId, { until: number; reason: string }>>;
+  hazards: Partial<Record<LocationId, { risk: number; note: string; until: number }>>;
+  climax: { kind: ClimaxKind; label: string; at: number; end: number; known: boolean; resolved: boolean };
+  director: {
+    intensity: number;
+    lastAdverse: number;
+    lastAny: number;
+    counts: Record<string, number>;
+    last: Record<string, number>;
+    pending: DirectorPending[];
+  };
+}
+
 export interface GameState {
   version: number;
   seed: number;
@@ -303,6 +368,7 @@ export interface GameState {
   };
   objectivesDone: Record<string, number>;
   result: ScenarioResult | null;
+  world: WorldConditions;
 }
 
 export type Command =
@@ -321,7 +387,16 @@ export type Command =
       packed: Items;
       vehicle: boolean;
     }
-  | { type: 'choose'; choiceId: string };
+  | { type: 'choose'; choiceId: string }
+  | { type: 'quarantine'; survivorId: string; value: boolean }
+  | { type: 'sandbox'; action: SandboxAction };
+
+export type SandboxAction =
+  | { kind: 'addCatastrophe'; catastrophe: CatastropheId }
+  | { kind: 'setCondition'; key: 'radiation' | 'horde' | 'threat' | 'flood'; value: number }
+  | { kind: 'triggerEvent'; eventId: string }
+  | { kind: 'weather'; weather: 'squall' | 'rain' | 'clear' }
+  | { kind: 'supplies'; amount: 'some' | 'lots' };
 
 export interface CommandResult {
   ok: boolean;

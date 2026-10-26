@@ -2,6 +2,7 @@ import { ITEMS, describeItems, isEmpty, solidCount } from './items';
 import { canAfford, consume, deposit, log, produce, take, transferAll } from './inventory';
 import { getSurvivor, newId, releaseJob, spillToCrate } from './jobs';
 import { chance, randInt } from './rng';
+import { contact, infect, isActive, locationHazard, mods } from './catastrophes';
 import { first, stormActive, updateNeeds } from './survivors';
 import { GATE_INSIDE } from './world';
 import type { CommandResult, Expedition, GameState, ItemId, Items, LocationId } from './types';
@@ -87,6 +88,8 @@ export function searchQuality(state: GameState, members: string[], packed: Items
 export function validateExpedition(state: GameState, destination: LocationId, members: string[], packed: Items, vehicle: boolean): string | null {
   if (!LOCATIONS[destination]) return 'Unknown destination.';
   if (stormActive(state)) return 'Nobody can travel in this storm.';
+  const route = state.world.routes[destination];
+  if (route && route.until > state.minute) return route.reason;
   if (!members.length) return 'Choose at least one survivor.';
   if (members.length > MAX_TEAM) return `At most ${MAX_TEAM} can go.`;
   if (new Set(members).size !== members.length) return 'Duplicate team member.';
@@ -98,6 +101,9 @@ export function validateExpedition(state: GameState, destination: LocationId, me
     if (s.away) return `${s.name} is already away.`;
     if (s.energy < 25) return `${first(s)} is too exhausted to travel.`;
     if (s.health < 35) return `${first(s)} is too badly hurt to travel.`;
+    if (s.trapped) return `${first(s)} is trapped.`;
+    if (s.quarantined) return `${first(s)} is in quarantine.`;
+    if (s.illness?.stage === 'sick') return `${first(s)} is too ill to travel.`;
   }
   if (vehicle && !vehicleAvailable(state)) return 'No working vehicle.';
   const need: Items = { ...packed };
@@ -185,7 +191,7 @@ function search(state: GameState, exp: Expedition): void {
   const want: Items = {};
   for (const id of Object.keys(loc.loot) as ItemId[]) {
     const have = loc.loot[id] ?? 0;
-    const n = Math.max(have > 0 ? 1 : 0, Math.round(have * q));
+    const n = Math.max(have > 0 ? 1 : 0, Math.round(have * Math.min(1, q * mods(state).loot)));
     if (n > 0) want[id] = n;
   }
   const got = addFind(state, exp, want);
@@ -198,9 +204,11 @@ function search(state: GameState, exp: Expedition): void {
   loc.visits++;
   exp.log.push(isEmpty(got) ? 'The place has been picked clean.' : `Recovered ${describeItems(got)}.`);
   // Risk: each member may be hurt while searching.
-  const base = LOCATIONS[exp.destination].risk;
+  const hz = locationHazard(state, exp.destination);
+  const base = LOCATIONS[exp.destination].risk * hz.risk * (exp.vehicle && isActive(state, 'outbreak') ? 1.2 : 1);
   for (const id of exp.members) {
     const s = getSurvivor(state, id)!;
+    if (hz.infection > 0 && contact(state, hz.infection * ((exp.packed.meds ?? 0) > 0 ? 0.5 : 1), [s])) exp.log.push(`${first(s)} was exposed to the fever.`);
     let p = base;
     if (s.trait === 'lightFooted') p *= 0.5;
     if (s.trait === 'tough') p *= 0.5;
@@ -210,6 +218,10 @@ function search(state: GameState, exp: Expedition): void {
       s.injury = Math.min(100, s.injury + hurt);
       s.health = Math.max(5, s.health - hurt / 2);
       exp.log.push(`${first(s)} was hurt (${hurt >= 30 ? 'badly' : 'lightly'}).`);
+      if (hz.bite > 0 && chance(state, hz.bite)) {
+        infect(s, 'bite', 18);
+        exp.log.push(`${first(s)} was bitten.`);
+      }
       if ((exp.packed.meds ?? 0) >= 1) {
         consume(state, { meds: 1 }, exp.packed);
         s.injury = Math.max(0, s.injury - 20);
@@ -223,10 +235,11 @@ export function tickExpeditions(state: GameState): void {
   for (const exp of state.expeditions) {
     if (exp.phase === 'done') continue;
     const team = exp.members.map((id) => getSurvivor(state, id)!);
+    const rad = locationHazard(state, exp.destination).radiation * ((exp.packed.meds ?? 0) > 0 ? 0.7 : 1);
     for (const s of team) {
       if (!s.alive) continue;
       s.activity = 'away';
-      updateNeeds(state, s, exp.packed);
+      updateNeeds(state, s, exp.packed, rad);
     }
     if (team.every((s) => !s.alive)) {
       exp.phase = 'done';

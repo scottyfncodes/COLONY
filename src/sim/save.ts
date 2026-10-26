@@ -1,5 +1,5 @@
 import { ITEM_IDS } from './items';
-import { SAVE_VERSION } from './setup';
+import { defaultWorld, SAVE_VERSION } from './setup';
 import type { GameState } from './types';
 
 export const SAVE_KEY = 'colony.save';
@@ -56,6 +56,7 @@ export function deserialize(text: string | null | undefined): LoadResult {
   if (!Array.isArray(s.jobs) || !(s.jobs as unknown[]).every((j) => isObj(j) && validItems(j.staged) && validItems(j.inputs))) problems.push('jobs');
   if (!validItems(s.inventory)) problems.push('inventory');
   if (!isObj(s.ledger) || !validItems((s.ledger as Record<string, unknown>).produced) || !validItems((s.ledger as Record<string, unknown>).consumed)) problems.push('ledger');
+  if (!isObj(s.world) || typeof (s.world as Record<string, unknown>).catastrophe !== 'string') problems.push('world');
   if (!isObj(s.weather) || !isObj(s.locations) || !Array.isArray(s.expeditions) || !isObj(s.events) || !Array.isArray(s.log) || !isObj(s.stats)) problems.push('structure');
   if (problems.length) return { ok: false, reason: `Save data is damaged (${problems.join(', ')}).` };
   return { ok: true, state: s as unknown as GameState };
@@ -63,7 +64,23 @@ export function deserialize(text: string | null | undefined): LoadResult {
 
 /** Upgrade older saves where possible. Returns null for unknown versions. */
 function migrate(raw: Record<string, unknown>): Record<string, unknown> | null {
-  const v = raw.version;
+  let v = raw.version;
+  if (v === 3) {
+    // v3 → v4: catastrophes. Older games are the original Storm Season scenario.
+    if (!isObj(raw.weather) || !Array.isArray(raw.survivors)) return null;
+    raw.world = defaultWorld(raw.weather as never);
+    const w = raw.world as { climax: { resolved: boolean; known: boolean } };
+    w.climax.resolved = !!(raw.weather as Record<string, unknown>).stormResolved;
+    w.climax.known = !!(raw.weather as Record<string, unknown>).stormForecastKnown;
+    for (const s of raw.survivors as Record<string, unknown>[]) {
+      if (!isObj(s)) continue;
+      s.dose ??= 0;
+      s.illness ??= null;
+      s.trapped ??= false;
+      s.quarantined ??= false;
+    }
+    raw.version = v = 4;
+  }
   if (v === SAVE_VERSION) return raw;
   return null;
 }

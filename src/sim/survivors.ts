@@ -11,7 +11,8 @@ import {
   stageInputs,
   workRate,
 } from './jobs';
-import { chance } from './rng';
+import { chance, nextRandom } from './rng';
+import { mods, radiationNow } from './catastrophes';
 import { hourOf, isNight, minuteOfDay } from './time';
 import { accessTiles, BUILDINGS, findPath, isSheltered, nearestWalkable, walkable, type Building } from './world';
 import type { GameState, Items, Job, NeedAction, Point, Survivor, WorldObject } from './types';
@@ -37,13 +38,22 @@ export function first(s: Survivor): string {
 }
 
 /** Per-minute decay of needs and health. `carry` is the pack used while away from the compound. */
-export function updateNeeds(state: GameState, s: Survivor, carry?: Items): void {
-  const sleeping = s.activity === 'sleeping';
+/**
+ * Per-minute decay of needs and health. `carry` is the pack used while away from the compound;
+ * `outdoorRad` overrides the radiation the survivor is exposed to (expeditions).
+ */
+export function updateNeeds(state: GameState, s: Survivor, carry?: Items, outdoorRad?: number): void {
+  const sleeping = s.activity === 'sleeping' || s.activity === 'trapped';
   const working = s.activity === 'working';
   const moving = s.activity === 'walking' || s.activity === 'hauling' || s.activity === 'fetching' || s.away;
   const slow = sleeping ? 0.5 : 1;
-  s.hunger = Math.max(0, s.hunger - (4 / 60) * slow * (s.trait === 'bigAppetite' ? 1.3 : 1));
-  s.thirst = Math.max(0, s.thirst - (4.5 / 60) * slow * (working && !isSheltered(s.x, s.y) ? 1.15 : 1));
+  const m = mods(state);
+  const radSick = s.dose > 100 ? 1.3 : 1;
+  s.hunger = Math.max(0, s.hunger - (4 / 60) * slow * m.needs * radSick * (s.trait === 'bigAppetite' ? 1.3 : 1));
+  s.thirst = Math.max(0, s.thirst - (4.5 / 60) * slow * m.needs * (s.illness?.stage === 'sick' ? 1.3 : 1) * (working && !isSheltered(s.x, s.y) ? 1.15 : 1));
+  // Radiation: walls stop most of it.
+  const rad = outdoorRad ?? radiationNow(state) * (isSheltered(s.x, s.y) ? 0.08 : 1);
+  if (rad > 0) s.dose += rad / 60;
   if (sleeping) {
     s.energy = Math.min(100, s.energy + (s.sleptInBed ? 13 : 7) / 60);
   } else {
@@ -88,6 +98,40 @@ export function updateNeeds(state: GameState, s: Survivor, carry?: Items): void 
     dmg += 0.5;
     causes.push('exhaustion');
   }
+  if (s.trapped) {
+    dmg += 1.5;
+    causes.unshift('being crushed under rubble');
+  }
+  if (s.dose > 100) {
+    dmg += s.dose > 400 ? 3 : s.dose > 250 ? 1.6 : 0.5;
+    causes.unshift('radiation sickness');
+  }
+  if (s.illness) {
+    const ill = s.illness;
+    ill.t--;
+    if (ill.stage === 'incubating' && ill.t <= 0) {
+      ill.stage = 'sick';
+      ill.t = (ill.kind === 'fever' ? 40 : 30) * 60;
+      log(state, ill.kind === 'fever' ? `${first(s)} is burning up: the fever has taken hold.` : `${first(s)}’s bite has turned feverish. Without treatment it will kill them.`, 'bad');
+    } else if (ill.stage === 'sick') {
+      if (ill.kind === 'fever') {
+        const bed = s.quarantined && s.need?.bedId ? state.objects.find((o) => o.id === s.need!.bedId && o.type === 'infirmary') : undefined;
+        dmg += bed ? (bed.powered ? 0.5 : 0.9) : 1.6;
+        causes.unshift('the fever');
+      } else {
+        dmg += 3;
+        causes.unshift('an infected bite');
+      }
+      s.energy = Math.max(0, s.energy - 1.5 / 60);
+      if (ill.t <= 0) {
+        s.illness = null;
+        if (ill.kind === 'fever') {
+          s.immune = true;
+          log(state, `${first(s)} has beaten the fever${s.quarantined ? ' and can leave quarantine' : ''}.`, 'good');
+        }
+      }
+    }
+  }
   if (s.trait === 'tough') dmg *= 0.6;
   if (dmg > 0) {
     s.health -= dmg / 60;
@@ -104,7 +148,7 @@ export function updateNeeds(state: GameState, s: Survivor, carry?: Items): void 
   target += s.health < 50 ? -10 : 0;
   if (state.power.supply > 0 && !state.power.deficit) target += 6;
   if (state.survivors.some((o) => o.alive && !o.away && o.trait === 'empath' && o.id !== s.id)) target += 8;
-  target += Number(state.flags.moraleMod ?? 0);
+  target += Number(state.flags.moraleMod ?? 0) + m.morale;
   target -= state.stats.deaths.length * 12;
   if (stormActive(state)) target -= 6;
   target = Math.max(5, Math.min(95, target));
@@ -339,10 +383,13 @@ function runNeed(state: GameState, s: Survivor, occ: Uint8Array): void {
       } else if (count(state, 'rawWater') >= 0.1) {
         const v = consumeUpTo(state, 'rawWater', 1.5);
         s.thirst = Math.min(100, s.thirst + 30 * v);
-        if (s.sick <= 0 && chance(state, 0.4)) {
+        state.flags.rawDrinks = Number(state.flags.rawDrinks ?? 0) + 1;
+        const contaminated = Number(state.flags.contaminatedUntil ?? 0) > state.minute ? 2 : 1;
+        if (s.sick <= 0 && chance(state, Math.min(0.9, 0.4 * mods(state).rawSick * contaminated))) {
           s.sick = 24 * 60;
           log(state, `${first(s)} drank untreated water and fell ill.`, 'bad');
         }
+        if (radiationNow(state) > 0) s.dose += 12;
       }
       s.need = null;
       s.activity = 'idle';
@@ -537,6 +584,14 @@ export function tickSurvivor(state: GameState, s: Survivor, occ: Uint8Array): vo
   if (!s.alive || s.away) return;
   updateNeeds(state, s);
   if (!s.alive) return;
+  if (s.trapped) {
+    s.activity = 'trapped';
+    return;
+  }
+  if (s.quarantined) {
+    runQuarantine(state, s, occ);
+    return;
+  }
 
   // If something was built on top of a survivor, step them aside.
   if (!walkable(occ, Math.floor(s.x), Math.floor(s.y)) && !(s.need?.kind === 'sleep' && s.need.arrived)) {
@@ -594,4 +649,84 @@ export function tickSurvivor(state: GameState, s: Survivor, occ: Uint8Array): vo
     return;
   }
   s.activity = 'idle';
+}
+
+// ---------------------------------------------------------------- quarantine and contagion
+
+function infirmaryBed(state: GameState, s: Survivor): WorldObject | null {
+  const taken = new Set(state.survivors.filter((o) => o.alive && o.quarantined && o.id !== s.id && o.need?.bedId).map((o) => o.need!.bedId));
+  const beds = state.objects.filter((o) => o.type === 'infirmary' && o.state === 'operational' && !taken.has(o.id));
+  beds.sort((a, b) => Math.hypot(a.x - s.x, a.y - s.y) - Math.hypot(b.x - s.x, b.y - s.y));
+  return beds[0] ?? null;
+}
+
+/** Quarantined survivors stop working, rest in an isolation bed (or apart on the floor), and are brought food and water. */
+function runQuarantine(state: GameState, s: Survivor, occ: Uint8Array): void {
+  const job = currentJob(state, s);
+  if (job) releaseJob(state, job);
+  s.moveTarget = null;
+  if (!s.need || s.need.kind !== 'sleep' || (!s.need.bedId && infirmaryBed(state, s))) {
+    const bed = infirmaryBed(state, s);
+    const t = bed ? approachTile(occ, s, bed) : floorSpot(state, occ, s);
+    if (!t) {
+      s.activity = 'idle';
+      return;
+    }
+    s.need = { kind: 'sleep', target: t, arrived: false, timer: 0, bedId: bed?.id ?? null };
+    s.goal = null;
+    s.path = [];
+  }
+  const n = s.need;
+  if (!n.arrived) {
+    s.activity = 'walking';
+    const r = walkTo(state, s, occ, n.target);
+    if (r === 'blocked') s.need = null;
+    if (r !== 'arrived') return;
+    n.arrived = true;
+    const bed = n.bedId ? getObject(state, n.bedId) : undefined;
+    if (bed) {
+      s.x = bed.x + 0.5;
+      s.y = bed.y + 0.5;
+    }
+  }
+  s.activity = 'sleeping';
+  s.sleptInBed = !!n.bedId;
+  // Food and water are brought to them.
+  if (s.thirst < 40 && count(state, 'water') >= 0.5) s.thirst = Math.min(100, s.thirst + 30 * consumeUpTo(state, 'water', 1.5));
+  if (s.hunger < 40 && count(state, 'food') >= 0.5) {
+    consume(state, { food: 0.5 });
+    s.hunger = Math.min(100, s.hunger + 45);
+  }
+}
+
+export function endQuarantine(state: GameState, s: Survivor): void {
+  s.quarantined = false;
+  if (s.need?.kind === 'sleep' && s.need.arrived) {
+    s.x = Math.floor(s.need.target.x) + 0.5;
+    s.y = Math.floor(s.need.target.y) + 0.5;
+  }
+  s.need = null;
+  s.activity = 'idle';
+  void state;
+}
+
+/** Fever passes between people close together; the quarantined in isolation beds are sealed off. */
+export function spreadIllness(state: GameState): void {
+  const present = presentSurvivors(state);
+  const carriers = present.filter((x) => x.illness?.kind === 'fever');
+  if (!carriers.length) return;
+  for (const c of carriers) {
+    let factor = c.illness!.stage === 'sick' ? 1 : 0.25;
+    if (c.quarantined) factor *= c.need?.bedId && c.need.arrived ? 0 : 0.15;
+    if (factor <= 0) continue;
+    for (const v of present) {
+      if (v === c || v.illness || v.immune || v.trapped) continue;
+      if (v.quarantined && v.need?.bedId) continue;
+      const d = Math.hypot(v.x - c.x, v.y - c.y);
+      if (d > 2.5) continue;
+      if (chance(state, 0.0025 * factor * (d < 1.2 ? 1.5 : 1))) {
+        v.illness = { kind: 'fever', stage: 'incubating', t: (14 + Math.floor(nextRandom(state) * 12)) * 60 };
+      }
+    }
+  }
 }

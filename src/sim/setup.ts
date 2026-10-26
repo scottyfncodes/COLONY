@@ -1,9 +1,9 @@
 import { rawCapacity } from './inventory';
 import { hashNoise } from './rng';
 import { START_MINUTE, MINUTES_PER_DAY } from './time';
-import type { GameState, Items, ObjectType, Role, Skill, Survivor, TraitId, WorldObject } from './types';
+import type { GameState, Items, ObjectType, Role, Skill, Survivor, TraitId, WorldConditions, WorldObject } from './types';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 export const TRAITS: Record<TraitId, { name: string; text: string }> = {
   tinkerer: { name: 'Tinkerer', text: 'Recovers an extra part when dismantling machinery.' },
@@ -24,7 +24,7 @@ export const ROLE_SKILL: Record<Role, Skill | null> = {
   Generalist: null,
 };
 
-interface SurvivorSeed {
+export interface SurvivorSeed {
   id: string;
   name: string;
   role: Role;
@@ -97,11 +97,43 @@ export function makeSurvivor(seed: SurvivorSeed, day = 1): Survivor {
     joinedDay: day,
     sleptInBed: true,
     lastAte: 0,
+    dose: 0,
+    illness: null,
+    trapped: false,
+    quarantined: false,
+  };
+}
+
+/** Strangers who may ask to join during a campaign (event director). */
+export const DRIFTERS: SurvivorSeed[] = [
+  { id: 's-mara', name: 'Mara Quist', role: 'Builder', trait: 'tough', secondary: 'scavenging', look: { skin: '#c4936c', hair: '#7a4a2a', hairStyle: 1, shirt: '#8a5a3a' }, x: 27, y: 15 },
+  { id: 's-dev', name: 'Dev Okon', role: 'Scavenger', trait: 'lightFooted', secondary: 'mechanical', look: { skin: '#5e3c28', hair: '#151010', hairStyle: 3, shirt: '#3a6a5a' }, x: 27, y: 16 },
+  { id: 's-lena', name: 'Lena Ruiz', role: 'Medic', trait: 'steady', secondary: 'construction', look: { skin: '#d2a07e', hair: '#2a1a12', hairStyle: 2, shirt: '#b8c4c8' }, x: 27, y: 15 },
+];
+
+export const NEVER = 9_000_000; // a minute that never arrives (disabled storm)
+
+export function defaultWorld(weather: GameState['weather']): WorldConditions {
+  return {
+    catastrophe: 'storm',
+    extra: [],
+    difficulty: 'normal',
+    mode: 'survival',
+    random: false,
+    radiation: 0,
+    horde: 0,
+    noise: 0,
+    threat: 0,
+    flood: 0,
+    routes: {},
+    hazards: {},
+    climax: { kind: 'storm', label: 'The storm', at: weather.stormStart, end: weather.stormEnd, known: false, resolved: false },
+    director: { intensity: 1, lastAdverse: 0, lastAny: 0, counts: {}, last: {}, pending: [] },
   };
 }
 
 let idc = 0;
-function obj(type: ObjectType, x: number, y: number, w: number, h: number, st: string, extra: Partial<WorldObject> = {}): WorldObject {
+export function obj(type: ObjectType, x: number, y: number, w: number, h: number, st: string, extra: Partial<WorldObject> = {}): WorldObject {
   idc++;
   return {
     id: extra.id ?? `o-${type}-${idc}`,
@@ -188,7 +220,9 @@ export function createGame(seed = 1): GameState {
     stats: { deaths: [], choices: [], powerHours: 0, cleanWaterMade: 0, foodGrown: 0, built: 0, repaired: 0, dismantled: 0, stormDamage: [] },
     objectivesDone: {},
     result: null,
+    world: undefined as unknown as WorldConditions,
   };
+  state.world = defaultWorld(state.weather);
   // Relationship foundation: everyone starts with mild trust in each other.
   for (const a of state.survivors) for (const b of state.survivors) if (a !== b) a.relationships[b.id] = 10 + Math.floor(hashNoise(seed, a.name.length * 31 + b.name.length) * 20);
   state.water.rawCap = rawCapacity(state);

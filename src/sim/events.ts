@@ -9,11 +9,13 @@ import { clockString, dayOf, MINUTES_PER_DAY } from './time';
 import { isSheltered } from './world';
 import type { EventChoice, GameState, Items, PendingEvent } from './types';
 import { hashNoise } from './rng';
+import { allCatastropheEvents, catastropheEvents, CATASTROPHES, contact } from './catastrophes';
+import { directorEventDefs } from './director';
 
 // Conditional events: each inspects simulation state, and either applies
 // consequences directly (log-only) or raises a decision that pauses time.
 
-interface EventDef {
+export interface EventDef {
   id: string;
   /** Minutes between repeats; omitted = fires once. */
   cooldown?: number;
@@ -56,19 +58,22 @@ export const EVENTS: EventDef[] = [
   {
     id: 'intro',
     when: () => true,
-    fire: () => ({
-      id: 'intro',
-      title: 'Day 1 — The Compound',
-      body:
-        'Six of you made it to the old Brannock Tool & Die compound. The fence still stands. The generator is seized, the well pump is dead, and there is food for two days and water for one.\n\nAn old trucker on the road said a big storm comes off the plains every autumn. Make this place work, and keep everyone alive for seven days.',
-      choices: [{ id: 'begin', label: 'Get to work', detail: '', available: true }],
-      context: {},
-    }),
+    fire: (s) => {
+      const def = CATASTROPHES[s.world.catastrophe];
+      const extra = s.world.extra.map((id) => CATASTROPHES[id].name);
+      return {
+        id: 'intro',
+        title: `Day 1 — ${def.name}`,
+        body: def.intro + (extra.length ? `\n\nAnd as if that weren’t enough: ${extra.join(', ')}.` : ''),
+        choices: [{ id: 'begin', label: 'Get to work', detail: '', available: true }],
+        context: {},
+      };
+    },
     resolve: () => 'The work begins.',
   },
   {
     id: 'stormRumour',
-    when: (s) => s.minute >= at(2, 9),
+    when: (s) => s.minute >= at(2, 9) && s.world.climax.kind === 'storm',
     fire: (s) => {
       log(s, 'The western sky is bruised purple at dawn. A big storm is coming — in a few days, maybe sooner.', 'warn');
       return null;
@@ -76,8 +81,19 @@ export const EVENTS: EventDef[] = [
   },
   {
     id: 'radioForecast',
-    when: (s) => !s.weather.stormForecastKnown && s.objects.some((o) => o.type === 'radio' && o.state === 'operational' && o.powered),
+    when: (s) => !s.world.climax.known && !s.world.climax.resolved && s.objects.some((o) => o.type === 'radio' && o.state === 'operational' && o.powered),
     fire: (s) => {
+      if (s.world.climax.kind !== 'storm') {
+        s.world.climax.known = true;
+        log(
+          s,
+          s.world.climax.kind === 'raid'
+            ? `Radio chatter on the Ridge Crew’s channel: they plan to hit the compound Day ${dayOf(s.world.climax.at)} around ${clockString(s.world.climax.at)}.`
+            : `Radio: a survivor up north is tracking a huge mass of infected moving this way. It will reach you Day ${dayOf(s.world.climax.at)} around ${clockString(s.world.climax.at)}.`,
+          'warn',
+        );
+        return null;
+      }
       s.weather.stormForecastKnown = true;
       log(s, `Radio bulletin: a severe storm will reach the region Day ${dayOf(s.weather.stormStart)} around ${clockString(s.weather.stormStart)}. Secure exposed equipment.`, 'warn');
       return null;
@@ -85,7 +101,7 @@ export const EVENTS: EventDef[] = [
   },
   {
     id: 'barometer',
-    when: (s) => s.minute >= s.weather.stormStart - 30 * 60,
+    when: (s) => s.world.climax.kind === 'storm' && s.minute >= s.weather.stormStart - 30 * 60,
     fire: (s) => {
       const known = s.weather.stormForecastKnown;
       s.weather.stormForecastKnown = true;
@@ -143,15 +159,18 @@ export const EVENTS: EventDef[] = [
         case 'trade':
           consume(s, want);
           produce(s, give);
+          contact(s, 0.2);
           s.trust.kessler += 10;
           return `Traded ${describeItems(want)} for ${describeItems(give)}. Marta nods: fair is fair.`;
         case 'help':
           consume(s, want);
+          contact(s, 0.35);
           s.trust.kessler += 35;
           for (const x of presentSurvivors(s)) x.morale = Math.min(100, x.morale + 6);
           return 'Marta grips your hand. “We won’t forget this.” The group feels good about it.';
         case 'talk':
           consume(s, { food: 1 });
+          contact(s, 0.25);
           produce(s, { mech: 2 });
           s.trust.kessler += 15;
           s.weather.stormForecastKnown = true;
@@ -416,7 +435,7 @@ export const EVENTS: EventDef[] = [
 
 export function runEvents(state: GameState): void {
   if (state.events.pending) return;
-  for (const ev of EVENTS) {
+  for (const ev of [...EVENTS, ...catastropheEvents(state)]) {
     const last = state.events.fired[ev.id];
     if (last !== undefined && (ev.cooldown === undefined || state.minute - last < ev.cooldown)) continue;
     if (!ev.when(state)) continue;
@@ -435,7 +454,7 @@ export function resolveEvent(state: GameState, choiceId: string): { ok: boolean;
   const c = ev.choices.find((x) => x.id === choiceId);
   if (!c) return { ok: false, message: 'Unknown choice.' };
   if (!c.available) return { ok: false, message: c.reason ?? 'Not possible.' };
-  const def = EVENTS.find((e) => e.id === ev.id);
+  const def = [...EVENTS, ...allCatastropheEvents(), ...directorEventDefs()].find((e) => e.id === ev.id);
   state.events.pending = null;
   const text = def?.resolve ? def.resolve(state, choiceId, ev) : '';
   if (text) log(state, text, 'info');

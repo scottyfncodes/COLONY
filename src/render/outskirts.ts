@@ -23,9 +23,18 @@ export interface Outskirts {
   wx: number;
   wy: number;
   scale: number;
+  haze: string;
 }
 
 /** Distant fires that smoulder in the ruins (renderer adds smoke and night glow). */
+/** Extra fires when society has collapsed: the whole district is burning. */
+export const COLLAPSE_FIRES: { x: number; y: number; z: number }[] = [
+  { x: 4.5, y: -10.5, z: 100 },
+  { x: 25.5, y: -10, z: 120 },
+  { x: -11, y: 28, z: 40 },
+  { x: 35.5, y: -8, z: 70 },
+];
+
 export const FIRES: { x: number; y: number; z: number }[] = [
   { x: -8.2, y: 20.6, z: 18 },
   { x: 11.5, y: -8.5, z: 70 },
@@ -438,7 +447,7 @@ function props(): Prop[] {
   return out;
 }
 
-export function paintOutskirts(scale: number): Outskirts {
+export function paintOutskirts(scale: number, haze = HAZE): Outskirts {
   const left = iso(X0, Y1).x - PAD;
   const right = iso(X1, Y0).x + PAD;
   const top = iso(X0, Y0).y - TOP_PAD;
@@ -449,7 +458,7 @@ export function paintOutskirts(scale: number): Outskirts {
   const ctx = c.getContext('2d')!;
   ctx.scale(scale, scale);
   ctx.translate(-left, -top);
-  ctx.fillStyle = HAZE;
+  ctx.fillStyle = haze;
   ctx.fillRect(left, top, right - left, bottom - top);
   for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) if (!inMap(x, y)) groundTile(ctx, x, y);
   terrain(ctx);
@@ -470,18 +479,18 @@ export function paintOutskirts(scale: number): Outskirts {
   };
   for (let k = 1; k <= RING * 2; k++) {
     const d = k / 2;
-    ctx.fillStyle = rgba(HAZE, Math.min(0.9, 0.05 + 0.8 * Math.pow(d / RING, 1.35)));
+    ctx.fillStyle = rgba(haze, Math.min(0.9, 0.05 + 0.8 * Math.pow(d / RING, 1.35)));
     ctx.beginPath();
     diamond(d, false);
     diamond(d - 0.5, true);
     ctx.fill();
   }
   // Beyond the ring (including ruin tops that rise past it) everything sinks into the dust.
-  ctx.fillStyle = rgba(HAZE, 0.9);
+  ctx.fillStyle = rgba(haze, 0.9);
   ctx.beginPath();
   ctx.rect(left, top, right - left, bottom - top);
   diamond(RING, true);
   ctx.fill('evenodd');
   ctx.globalCompositeOperation = 'source-over';
-  return { canvas: c, wx: left, wy: top, scale };
+  return { canvas: c, wx: left, wy: top, scale, haze };
 }

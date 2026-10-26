@@ -6,8 +6,9 @@ import type { GameState, ObjectType, Survivor, WorldObject } from '../sim/types'
 import { box, hash, line, P, poly, rgba, roundRect, shade, type Ctx } from './draw';
 import { Camera, iso, type Vec } from './iso';
 import { GROUND_OX, GROUND_OY, paintGround } from './ground';
-import { FIRES, HAZE, paintOutskirts, type Outskirts } from './outskirts';
-import { drawObject, drawSurvivor, drawVisitor, type DrawEnv } from './sprites';
+import { COLLAPSE_FIRES, FIRES, HAZE, paintOutskirts, type Outskirts } from './outskirts';
+import { activeDefs, CATASTROPHES, isActive } from '../sim/catastrophes';
+import { drawInfected, drawObject, drawSurvivor, drawVisitor, type DrawEnv } from './sprites';
 
 export type Pick =
   | { kind: 'survivor'; id: string }
@@ -89,7 +90,6 @@ export class Renderer {
       this.groundScale = scale;
       this.ground = paintGround(scale);
     }
-    if (!this.outskirts) this.outskirts = paintOutskirts(1);
   }
 
   snapshot(state: GameState): void {
@@ -155,7 +155,9 @@ export class Renderer {
     this.detectChanges(state);
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.fillStyle = HAZE;
+    const def = CATASTROPHES[state.world.catastrophe];
+    if (!this.outskirts || this.outskirts.haze !== def.haze) this.outskirts = paintOutskirts(1, def.haze);
+    ctx.fillStyle = def.haze ?? HAZE;
     ctx.fillRect(0, 0, cam.width, cam.height);
 
     const shakeX = storm ? Math.sin(t * 23) * 0.6 : 0;
@@ -172,6 +174,7 @@ export class Renderer {
     }
 
     this.drawFloorDecals(ctx, state, view);
+    if (state.world.flood > 0.5) this.drawFlood(ctx, state.world.flood, t);
 
     const items: Drawable[] = [];
     this.collectWalls(items);
@@ -189,7 +192,14 @@ export class Renderer {
       const p = this.pos(s, alpha);
       const job = s.jobId ? state.jobs.find((j) => j.id === s.jobId) : undefined;
       const cargo = !!job && (job.phase === 'haul' || (job.phase === 'travel' && Object.keys(job.staged).some((k) => k !== 'tools')));
-      items.push({ depth: p.x + p.y + 0.05, draw: () => drawSurvivor(ctx, s, p, env, view.selectedSurvivor === s.id, cargo) });
+      items.push({ depth: p.x + p.y + (s.trapped ? -0.2 : 0.05), draw: () => drawSurvivor(ctx, s, p, env, view.selectedSurvivor === s.id, cargo) });
+    }
+    if (isActive(state, 'outbreak')) {
+      const n = Math.min(26, Math.round(state.world.horde / 4));
+      for (let i = 0; i < n; i++) {
+        const pos = infectedPos(i, t, state.world.horde);
+        items.push({ depth: pos.x + pos.y, draw: () => drawInfected(ctx, pos.x, pos.y, t, i) });
+      }
     }
     if (typeof state.flags.visitors === 'number' && state.minute < state.flags.visitors) {
       const shirts = ['#6a5a8a', '#8a3a3a', '#4a5a6a'];
@@ -218,6 +228,7 @@ export class Renderer {
 
     // Screen-space passes.
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.drawAtmosphere(ctx, state, dt);
     this.drawWeather(ctx, state, t, dt);
     this.drawLighting(ctx, state, night, dark, t);
     this.drawOverlays(ctx, state, view, t);
@@ -422,11 +433,14 @@ export class Renderer {
   }
 
   private updateParticles(state: GameState, env: DrawEnv, dt: number, alpha: number): void {
-    // Smoke columns from fires still smouldering in the ruins.
-    for (const f of FIRES) {
+    // Smoke columns from fires still smouldering in the ruins (the whole district burns in a collapse).
+    for (const f of this.fires(state)) {
       if (Math.random() < dt * 5) {
         this.particles.push({ x: f.x + (Math.random() - 0.5) * 0.4, y: f.y, z: f.z, vx: 0.25 + state.weather.wind * 0.9, vy: -0.25 - state.weather.wind * 0.5, vz: 16 + Math.random() * 8, life: 0, max: 7, size: 7, color: '#3e3630', kind: 'smoke' });
       }
+    }
+    for (const o of state.objects) {
+      if (o.data.burning && Math.random() < dt * 8) this.particles.push({ x: o.x + o.w / 2, y: o.y + o.h / 2, z: 40, vx: 0.2 + state.weather.wind * 0.6, vy: -0.15, vz: 18, life: 0, max: 3.5, size: 5, color: '#3a3430', kind: 'smoke' });
     }
     const gen = state.objects.find((o) => o.type === 'generator');
     if (gen && gen.state === 'operational' && gen.data.running && Math.random() < dt * 12) {
@@ -509,6 +523,65 @@ export class Renderer {
     this.floaters = this.floaters.filter((f) => f.life < 2.2);
   }
 
+  private fires(state: GameState) {
+    return isActive(state, 'collapse') ? [...FIRES, ...COLLAPSE_FIRES] : FIRES;
+  }
+
+  private drawFlood(ctx: Ctx, level: number, t: number): void {
+    const a = Math.min(0.62, level / 100);
+    const y0 = 29 - (8 * level) / 100;
+    poly(ctx, [P(3, y0), P(29, y0), P(29, 29), P(3, 29)], `rgba(70,96,104,${a})`);
+    ctx.strokeStyle = `rgba(190,215,220,${a * 0.6})`;
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 14; i++) {
+      const x = 4 + ((i * 7.3 + t * 0.3) % 24);
+      const y = y0 + 0.5 + ((i * 3.1) % (29 - y0 - 0.5));
+      const p = P(x, y);
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 8, 2.5, 0, 0, Math.PI);
+      ctx.stroke();
+    }
+  }
+
+  private motes: { x: number; y: number; v: number; s: number }[] = [];
+
+  /** Catastrophe-specific atmosphere: a colour grade plus ash or dust drifting through the air. */
+  private drawAtmosphere(ctx: Ctx, state: GameState, dt: number): void {
+    const cam = this.camera;
+    const defs = activeDefs(state);
+    for (const d of defs) {
+      if (d.tint === 'rgba(0,0,0,0)') continue;
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = d.tint.replace(/[\d.]+\)$/, '0.35)');
+      ctx.fillRect(0, 0, cam.width, cam.height);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = d.tint;
+      ctx.fillRect(0, 0, cam.width, cam.height);
+    }
+    const kind = defs.find((d) => d.particles === 'ash' || d.particles === 'dust')?.particles;
+    if (!kind) {
+      this.motes.length = 0;
+      return;
+    }
+    const target = Math.floor((cam.width * cam.height) / (kind === 'ash' ? 9000 : 14000));
+    while (this.motes.length < target) this.motes.push({ x: Math.random() * cam.width, y: Math.random() * cam.height, v: 0.4 + Math.random(), s: 1 + Math.random() * 1.8 });
+    this.motes.length = Math.min(this.motes.length, target);
+    ctx.fillStyle = kind === 'ash' ? 'rgba(220,222,200,0.55)' : 'rgba(230,200,150,0.35)';
+    const wind = state.weather.wind;
+    for (const m of this.motes) {
+      if (kind === 'ash') {
+        m.y += 22 * m.v * dt;
+        m.x += (10 + wind * 30) * dt + Math.sin(m.y * 0.03) * 0.3;
+      } else {
+        m.x += (6 + wind * 18) * m.v * dt;
+        m.y += Math.sin(m.x * 0.02 + m.v) * 4 * dt;
+      }
+      if (m.y > cam.height) m.y -= cam.height;
+      if (m.x > cam.width) m.x -= cam.width;
+      ctx.fillRect(m.x, m.y, m.s, kind === 'ash' ? m.s * 0.7 : m.s);
+    }
+  }
+
   // ---------------------------------------------------------------- weather & light
 
   private rain: { x: number; y: number; s: number }[] = [];
@@ -580,7 +653,8 @@ export class Renderer {
       if (o.type === 'purifier' && o.powered) lights.push({ x: o.x + 0.5, y: o.y + 0.9, z: 0, r: 1.2, a: 0.5, warm: '#ffb070' });
       if (o.type === 'forklift' && o.state === 'operational' && !o.data.away) lights.push({ x: o.x + 0.5, y: o.y + 2.2, z: 0, r: 1.8, a: 0.6, warm: '#ffe0a0' });
     }
-    for (const f of FIRES) lights.push({ x: f.x, y: f.y, z: f.z, r: 2.4, a: 0.7, warm: '#ff8a3a' });
+    for (const o of state.objects) if (o.data.burning) lights.push({ x: o.x + o.w / 2, y: o.y + o.h / 2, z: 20, r: 3.2, a: 0.95, warm: '#ff8a3a' });
+    for (const f of this.fires(state)) lights.push({ x: f.x, y: f.y, z: f.z, r: 2.4, a: 0.7, warm: '#ff8a3a' });
     if (powered) {
       // Bare bulbs in the buildings when there's power in the system.
       lights.push({ x: 8.5, y: 7.5, z: 0, r: 4.5, a: 0.8, warm: '#ffd590' }, { x: 7, y: 17.5, z: 0, r: 3.6, a: 0.75, warm: '#ffd590' }, { x: 18, y: 6.5, z: 0, r: 3.4, a: 0.75, warm: '#ffd590' });
@@ -745,5 +819,20 @@ export function objectHeight(o: WorldObject): number {
     case 'depot': return 40;
     case 'wreckedCar': return 30;
     default: return 22;
+  }
+}
+
+/** The infected wander a loop just outside the fence; the bigger the horde, the closer they press. */
+function infectedPos(i: number, t: number, horde: number): { x: number; y: number } {
+  const per = 4 * 30;
+  const u = ((i * 37.3 + t * (0.15 + (i % 5) * 0.04)) % per + per) % per;
+  const off = 1.4 - Math.min(0.9, horde / 120) + ((i * 7) % 5) * 0.25;
+  const side = Math.floor(u / 30);
+  const k = 1.5 + (u % 30) * 0.97;
+  switch (side) {
+    case 0: return { x: k, y: 2 - off };
+    case 1: return { x: 30 + off, y: k };
+    case 2: return { x: 31 - k, y: 30 + off };
+    default: return { x: 2 - off, y: 31 - k };
   }
 }

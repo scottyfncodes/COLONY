@@ -4,6 +4,7 @@ import { jobsOn, queueAction, queueTreat } from './jobs';
 import { hashNoise } from './rng';
 import { isNight } from './time';
 import { isSheltered } from './world';
+import { radiationNow } from './catastrophes';
 import type { GameState, ItemId, WorldObject } from './types';
 
 // Infrastructure communicates only through shared state: fuel and water in the
@@ -41,6 +42,8 @@ export function consumerDemand(state: GameState, o: WorldObject): number {
       return isNight(state.minute) ? draw : 0;
     case 'radio':
       return draw;
+    case 'infirmary':
+      return state.survivors.some((x) => x.alive && x.quarantined && x.need?.bedId === o.id && x.need.arrived) ? draw : 0;
     default:
       return 0;
   }
@@ -69,7 +72,7 @@ export function tickPower(state: GameState): void {
 
   const consumers = state.objects.filter((o) => (OBJECT_DEFS[o.type].draw ?? 0) > 0);
   // Priority: water first, then light, then workshop, then radio.
-  const priority: Record<string, number> = { waterPump: 0, purifier: 1, lamp: 2, workbench: 3, radio: 4 };
+  const priority: Record<string, number> = { infirmary: 0, waterPump: 1, purifier: 2, lamp: 3, workbench: 4, radio: 5 };
   consumers.sort((a, b) => (priority[a.type] ?? 9) - (priority[b.type] ?? 9));
   const wants = consumers.map((o) => ({ o, kw: consumerDemand(state, o) }));
   const demand = wants.reduce((t, w) => t + w.kw, 0);
@@ -212,7 +215,9 @@ export function tickCrops(state: GameState): void {
       o.data.moisture = Math.min(100, o.data.moisture + got * 25);
     }
     if (o.data.moisture > 0) {
-      o.data.growth = Math.min(100, (o.data.growth ?? 0) + 100 / (GROW_HOURS * 60));
+      // Fallout dust settles on uncovered crops and stunts them.
+      const dusted = !o.reinforced && radiationNow(state) > 3 ? 0.5 : 1;
+      o.data.growth = Math.min(100, (o.data.growth ?? 0) + (100 / (GROW_HOURS * 60)) * dusted);
       o.data.dry = 0;
     } else {
       o.data.dry = (o.data.dry ?? 0) + 1;
@@ -239,7 +244,7 @@ export function tickWeather(state: GameState): void {
     wx.rain = 1;
   } else if (wx.rainWindows.some((r) => m >= r.start && m < r.end)) {
     wx.kind = 'rain';
-    wx.rain = 0.45;
+    wx.rain = wx.rainWindows.some((r) => r.heavy && m >= r.start && m < r.end) ? 0.95 : 0.45;
   } else {
     const soon = wx.stormStart - m;
     wx.kind = soon > 0 && soon < 10 * 60 ? 'overcast' : 'clear';
@@ -267,7 +272,8 @@ export function autoJobs(state: GameState): void {
   }
   for (const s of state.survivors) {
     if (!s.alive || s.away) continue;
-    if ((s.injury >= 30 || s.sick > 0 || s.health < 45) && count(state, 'meds') >= 1) {
+    const urgent = s.injury >= 30 || s.sick > 0 || s.health < 45 || s.dose >= 120 || s.illness?.kind === 'bite' || (s.illness?.kind === 'fever' && s.illness.stage === 'sick');
+    if (urgent && !s.trapped && count(state, 'meds') >= (s.illness?.kind === 'bite' ? 2 : 1)) {
       if (!state.jobs.some((j) => j.kind === 'treat' && j.targetId === s.id)) queueTreat(state, s.id, null, true);
     }
   }
