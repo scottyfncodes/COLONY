@@ -48,7 +48,8 @@ export function runSandbox(s: GameState, a: SandboxAction): CommandResult {
       const lim = LIMITS[a.key];
       if (!lim || !Number.isFinite(a.value)) return { ok: false, message: 'Invalid condition.' };
       s.world[a.key] = Math.max(lim[0], Math.min(lim[1], a.value));
-      return { ok: true, message: `${a.key} set to ${s.world[a.key]}.` };
+      const label = { radiation: 'Radiation', horde: 'Infected', threat: 'Raider threat', flood: 'Flood' }[a.key];
+      return { ok: true, message: `${label}: ${a.key === 'radiation' ? `${s.world[a.key].toFixed(1)} mSv/h` : Math.round(s.world[a.key])}${a.key === 'flood' ? '%' : ''}.` };
     }
     case 'triggerEvent': {
       const e = directorEvent(a.eventId);

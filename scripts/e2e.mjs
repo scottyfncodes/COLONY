@@ -42,6 +42,9 @@ async function run(name, opts) {
   const shot = (n) => page.screenshot({ path: `${out}/${name}-${n}.png` });
   const ev = (fn, arg) => page.evaluate(fn, arg);
 
+  check(await page.locator('.sheet.m-scenario').isVisible(), `${name}: first launch shows scenario selection`);
+  await tapSel('[data-a="draft"][data-v="pick|storm"]');
+  await tapSel('[data-a="begin"]');
   check(await page.locator('.sheet.m-event').isVisible(), `${name}: intro event shown`);
   await tapSel('[data-a="choose"]');
   check(!(await page.locator('#modal').isVisible()), `${name}: intro dismissed`);
@@ -148,6 +151,44 @@ async function run(name, opts) {
   await page.reload();
   await page.waitForTimeout(800);
   check(await ev(() => window.__colony.state.minute === 420), `${name}: corrupted save falls back to a new game`);
+  // Phase 2: choose a catastrophe from the menu.
+  if (await page.locator('.sheet.m-scenario').isVisible()) await tapSel('[data-a="modal-close"]');
+  if (await page.locator('.sheet.m-event').isVisible()) await tapSel('[data-a="choose"]');
+  await tapSel('#speed [data-a="modal"][data-v="menu"]');
+  await tapSel('[data-a="modal"][data-v="scenario"]');
+  await tapSel('[data-a="draft"][data-v="pick|pandemic"]');
+  await tapSel('[data-a="begin"]');
+  check((await page.locator('.ev-title').textContent()).includes('The Fever'), `${name}: pandemic briefing shown`);
+  await tapSel('[data-a="choose"]');
+  check(await ev(() => window.__colony.state.world.catastrophe === 'pandemic' && window.__colony.state.survivors.some((x) => x.illness)), `${name}: pandemic initialised (someone incubating)`);
+  await tapSel('#dock [data-v="world"]');
+  check(/The Fever/.test(await page.locator('#panel h2').first().textContent()), `${name}: World panel shows the scenario`);
+  await shot('world-pandemic');
+  await tapSel('[data-a="sel-surv"][data-v="s-theo"]');
+  await tapSel('[data-a="quarantine"][data-v="s-theo"]');
+  check(await ev(() => window.__colony.state.survivors.find((x) => x.id === 's-theo').quarantined), `${name}: quarantine from the survivor panel`);
+  // Custom sandbox: fallout with the infected layered on top.
+  await tapSel('[data-a="close-panel"]');
+  await tapSel('#speed [data-a="modal"][data-v="menu"]');
+  await tapSel('[data-a="modal"][data-v="scenario"]');
+  await tapSel('[data-a="draft"][data-v="view|custom"]');
+  await tapSel('[data-a="draft"][data-v="main|fallout"]');
+  await tapSel('[data-a="draft"][data-v="extra|outbreak"]');
+  await shot('sandbox-setup');
+  await tapSel('[data-a="begin"]');
+  await tapSel('[data-a="choose"]');
+  check(await ev(() => { const w = window.__colony.state.world; return w.mode === 'sandbox' && w.catastrophe === 'fallout' && w.extra.includes('outbreak'); }), `${name}: sandbox with layered catastrophes`);
+  await tapSel('#dock [data-v="world"]');
+  await tapSel('[data-a="sb-add"][data-v="quake"]');
+  check(await ev(() => window.__colony.state.world.extra.includes('quake') && window.__colony.state.objects.some((o) => o.type === 'rubble')), `${name}: sandbox adds an earthquake mid-game`);
+  await tapSel('[data-a="sb-weather"][data-v="squall"]');
+  await tapSel('[data-a="sb-cond"][data-v="horde|10"]');
+  check(await ev(() => window.__colony.state.world.horde >= 24), `${name}: sandbox adjusts conditions`);
+  await ev(() => window.__colony.advance(90));
+  await page.waitForTimeout(600);
+  await shot('sandbox-play');
+  const sv = await ev(() => { localStorage.setItem('probe', '1'); return window.__colony.save(), JSON.parse(localStorage.getItem('colony.save')).world.extra.length; });
+  check(sv === 2, `${name}: sandbox state saves cleanly`);
   check(errors.length === 0, `${name}: no runtime errors ${errors.join(' | ')}`);
   await browser.close();
 }

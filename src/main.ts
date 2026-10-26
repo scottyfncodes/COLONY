@@ -4,6 +4,7 @@ import { dispatch, isPaused, newGame, step, validatePlacement } from './sim/sim'
 import { clearSave, loadFrom, saveTo } from './sim/save';
 import { SPEEDS, type SpeedIndex } from './sim/time';
 import type { Command, CommandResult, GameState, ObjectType } from './sim/types';
+import type { NewGameOptions } from './sim/catastrophes';
 import { Renderer, type ViewState } from './render/renderer';
 import { injectIcons } from './ui/icons';
 import { UI, type Controller, type ModalKind, type PanelKind } from './ui/ui';
@@ -50,6 +51,8 @@ class Game implements Controller {
     } else {
       if (loaded.reason !== 'No save found.') note = `${loaded.reason} Starting a fresh game.`;
       this.state = newGame();
+      // First visit: pick a catastrophe before the briefing.
+      this.modal = 'scenario';
     }
     this.renderer = new Renderer(canvas);
     this.ui = new UI(root, this);
@@ -195,9 +198,9 @@ class Game implements Controller {
     if (o) this.focus(o.x + o.w / 2, o.y + o.h / 2);
   }
 
-  newGame(): void {
+  newGame(opts?: Partial<NewGameOptions>): void {
     clearSave(store);
-    this.state = newGame();
+    this.state = newGame(undefined, opts);
     this.view = { selectedSurvivor: null, selectedObject: null, ghost: null, hover: null };
     this.panel = null;
     this.modal = null;

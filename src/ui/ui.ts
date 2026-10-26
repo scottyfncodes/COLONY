@@ -5,18 +5,20 @@ import { cleanCapacity, count, rawCapacity, roomFor, storageCapacity } from '../
 import { ITEMS, describeItems, missingItems, solidCount } from '../sim/items';
 import { actionBlocked, availableActions, getObject, getSurvivor, jobWaitingOn, workRate } from '../sim/jobs';
 import { immediateObjective, objectives } from '../sim/scenario';
-import { canToggle } from '../sim/sim';
+import { blueprintAvailable, canToggle } from '../sim/sim';
 import { TRAITS } from '../sim/setup';
 import { presentSurvivors } from '../sim/survivors';
 import { clockString, dayOf, formatDuration, isNight } from '../sim/time';
-import type { Command, CommandResult, GameState, ItemId, Items, Job, LocationId, ObjectType, Survivor, WorldObject } from '../sim/types';
+import type { CatastropheId, Command, CommandResult, GameState, ItemId, Items, Job, LocationId, ObjectType, Survivor, WorldObject } from '../sim/types';
 import type { ViewState } from '../render/renderer';
 import type { SpeedIndex } from '../sim/time';
 import { icon } from './icons';
+import { defaultDraft, draftOptions, hazardPill, scenarioSelectHtml, SCENARIO_ICON, worldPanelHtml, type NewGameDraft } from './scenarioUi';
+import { isActive, locationHazard, radiationNow, type NewGameOptions } from '../sim/catastrophes';
 import { portrait } from './portraits';
 
-export type PanelKind = 'object' | 'survivor' | 'build' | 'jobs' | 'log' | 'stores' | null;
-export type ModalKind = 'expedition' | 'menu' | 'objectives' | 'help' | 'end' | 'confirmNew' | null;
+export type PanelKind = 'object' | 'survivor' | 'build' | 'jobs' | 'log' | 'stores' | 'world' | null;
+export type ModalKind = 'expedition' | 'menu' | 'objectives' | 'help' | 'end' | 'confirmNew' | 'scenario' | null;
 
 export interface Controller {
   state: GameState;
@@ -37,7 +39,7 @@ export interface Controller {
   cancelPlacing(): void;
   centerOnSurvivor(id: string): void;
   centerOnObject(id: string): void;
-  newGame(): void;
+  newGame(opts?: Partial<NewGameOptions>): void;
   saveStatus: string;
 }
 
@@ -56,6 +58,7 @@ const ACTIVITY: Record<string, string> = {
   fetching: 'Fetching parts',
   sheltering: 'Sheltering',
   away: 'Away',
+  trapped: 'Trapped',
   dead: 'Dead',
 };
 
@@ -163,6 +166,7 @@ export class UI {
   private toastTimer = 0;
   private exp: { dest: LocationId; members: string[]; packed: Items; vehicle: boolean } = { dest: 'market', members: [], packed: { water: 6 }, vehicle: false };
   private endShown = false;
+  draft: NewGameDraft = defaultDraft();
   private sheet: HTMLDivElement | null = null;
 
   constructor(private root: HTMLElement, private c: Controller) {
@@ -227,7 +231,8 @@ export class UI {
     if (panel) this.set('panel', panel);
     // Modals: a pending event always takes precedence.
     let modal = '';
-    if (s.events.pending) modal = this.eventHtml(s);
+    if (this.c.modal === 'scenario') modal = scenarioSelectHtml(s, this.draft);
+    else if (s.events.pending) modal = this.eventHtml(s);
     else if (s.result && !this.endShown) {
       this.endShown = true;
       this.c.modal = 'end';
@@ -243,7 +248,7 @@ export class UI {
       }
     }
     this.show('modal', !!modal);
-    const kind = `sheet m-${s.events.pending ? `event ev-${s.events.pending.id}` : this.c.modal ?? ''}`;
+    const kind = `sheet m-${this.c.modal === 'scenario' ? 'scenario' : s.events.pending ? `event ev-${s.events.pending.id}` : this.c.modal ?? ''}`;
     if (!this.sheet) {
       this.sheet = document.createElement('div');
       this.els.modal.appendChild(this.sheet);
@@ -276,7 +281,17 @@ export class UI {
     const wxIcon = wx.kind === 'storm' ? 'storm' : wx.kind === 'rain' ? 'rain' : wx.kind === 'overcast' ? 'cloud' : night ? 'moon' : 'sun';
     const wxText = { storm: 'Storm', rain: 'Rain', overcast: 'Overcast', clear: night ? 'Night' : 'Clear' }[wx.kind];
     let storm = '';
-    if (wx.kind === 'storm') storm = `<span class="storm live">${icon('storm')}Storm · ends in ${formatDuration(wx.stormEnd - s.minute)}</span>`;
+    const c = s.world.climax;
+    if (c.kind !== 'storm') {
+      const left = c.at - s.minute;
+      if (!c.resolved)
+        storm =
+          left <= 0
+            ? `<span class="storm live">${icon('shield')}${esc(c.label)}</span>`
+            : c.known
+              ? `<span class="storm ${left < 24 * 60 ? 'soon' : ''}">${icon('shield')}${formatDuration(left)}</span>`
+              : `<span class="storm vague" title="Repair the radio for better intelligence">${icon('shield')}${s.minute > 32 * 60 ? `~Day ${dayOf(c.at)}` : 'coming'}</span>`;
+    } else if (wx.kind === 'storm') storm = `<span class="storm live">${icon('storm')}Storm · ends in ${formatDuration(wx.stormEnd - s.minute)}</span>`;
     else if (!wx.stormResolved) {
       const left = wx.stormStart - s.minute;
       storm = wx.stormForecastKnown
@@ -324,7 +339,7 @@ export class UI {
   }
 
   private alertsHtml(s: GameState): string {
-    const out: string[] = [];
+    const out: string[] = [hazardPill(s)];
     const idle = presentSurvivors(s).filter((x) => x.activity === 'idle' && !x.jobId && !x.moveTarget);
     if (idle.length && !s.events.pending) out.push(`<button class="alert" data-a="sel-surv" data-v="${idle[0].id}">${icon('person')}${idle.length} idle</button>`);
     const blocked = s.jobs.filter((j) => j.phase === 'queued' && jobWaitingOn(s, j));
@@ -350,6 +365,7 @@ export class UI {
       b('panel', 'build', 'build', 'Build', p === 'build' || !!this.c.placing),
       b('panel', 'jobs', 'jobs', 'Jobs', p === 'jobs', jobs ? String(jobs) : ''),
       b('expedition', '', 'map', 'Expedition', this.c.modal === 'expedition', away ? String(away) : ''),
+      b('panel', 'world', SCENARIO_ICON[s.world.catastrophe], 'World', p === 'world', s.world.director.pending.length ? '!' : ''),
       b('panel', 'log', 'log', 'Log', p === 'log'),
     ].join('');
   }
@@ -386,6 +402,7 @@ export class UI {
       case 'build': return this.buildHtml(s);
       case 'jobs': return this.jobsHtml(s);
       case 'log': return this.logHtml(s);
+      case 'world': return worldPanelHtml(s);
       case 'stores': return this.storesHtml(s);
       default: return '';
     }
@@ -523,13 +540,29 @@ export class UI {
       ${statLine('Fed', x.hunger, 'fd')}
       ${statLine('Energy', x.energy, 'en', x.sleptInBed ? '' : '<em class="tag warn">no bed</em>')}
       ${statLine('Morale', x.morale, 'mo')}
+      ${x.dose > 1 || radiationNow(s) > 0 ? `<div class="need"><span>Radiation</span>${bar(Math.min(100, x.dose / 4), 'rad')}<b>${Math.round(x.dose)}</b><em class="tag ${x.dose > 250 ? 'bad' : x.dose > 100 ? 'warn' : ''}">mSv</em></div>` : ''}
     </div>`;
+    const cond: string[] = [];
+    if (x.trapped) cond.push(`<span class="tone-bad">Pinned under rubble. Dig them out before they’re crushed.</span>`);
+    if (x.illness?.kind === 'bite') cond.push(`<span class="tone-bad">Bitten${x.illness.stage === 'sick' ? ' — the infection has turned' : ''}. Treat with 2 meds; the medic is most reliable.</span>`);
+    if (x.illness?.kind === 'fever' && x.illness.stage === 'sick') cond.push(`<span class="tone-bad">Fever — contagious to anyone close by. ${x.quarantined ? 'In quarantine.' : 'Isolate them.'}</span>`);
+    if (x.illness?.kind === 'fever' && x.illness.stage === 'incubating' && x.illness.t < 8 * 60) cond.push(`<span class="tone-warn">Looks flushed. Might be coming down with something.</span>`);
+    if (x.immune) cond.push('<span class="tone-good">Recovered from the fever: immune.</span>');
+    if (x.dose > 100) cond.push(`<span class="tone-warn">Radiation sickness. Keep them indoors; treatment brings the dose down.</span>`);
+    if (cond.length) html += `<div class="conds">${cond.join('')}</div>`;
     html += `<div class="doing">${icon(x.away ? 'map' : x.activity === 'sleeping' ? 'bed' : 'clock')}<span>${x.away ? 'On an expedition' : esc(ACTIVITY[x.activity] ?? x.activity)}${job ? ` — ${esc(job.label)}` : ''}</span></div>`;
     if (!x.away) {
       html += `<div class="row wrap">`;
       if (job) html += `<button class="ghost" data-a="stopjob" data-v="${x.id}">Stop job</button>`;
-      if ((x.injury > 0 || x.sick > 0 || x.health < 80) && !s.jobs.some((j) => j.kind === 'treat' && j.targetId === x.id))
-        html += `<button class="ghost" data-a="treat" data-v="${x.id}" ${count(s, 'meds') < 1 ? 'disabled' : ''}>${icon('meds')}Treat (1 meds)</button>`;
+      const medsNeeded = x.illness?.kind === 'bite' ? 2 : 1;
+      const needsCare = x.injury > 0 || x.sick > 0 || x.health < 80 || x.dose >= 80 || x.illness?.kind === 'bite' || x.illness?.stage === 'sick';
+      if (needsCare && !s.jobs.some((j) => j.kind === 'treat' && j.targetId === x.id))
+        html += `<button class="ghost" data-a="treat" data-v="${x.id}" ${count(s, 'meds') < medsNeeded ? 'disabled' : ''}>${icon('meds')}Treat (${medsNeeded} meds)</button>`;
+      if (x.trapped) {
+        const r = s.objects.find((o) => o.type === 'rubble' && o.state === 'pile' && o.data.trapped);
+        if (r) html += `<button class="ghost" data-a="sel-obj" data-v="${r.id}">${icon('warn')}Show the rubble</button>`;
+      } else if (x.quarantined || x.illness || isActive(s, 'pandemic') || isActive(s, 'outbreak'))
+        html += `<button class="ghost ${x.quarantined ? 'on' : ''}" data-a="quarantine" data-v="${x.id}">${x.quarantined ? 'End quarantine' : 'Quarantine'}</button>`;
       html += `<button class="ghost ${x.autoWork ? 'on' : ''}" data-a="autowork" data-v="${x.id}">${x.autoWork ? 'Takes open jobs ✓' : 'Waits for orders'}</button>`;
       html += `<button class="ghost" data-a="center" data-v="${x.id}">${icon('center')}Find</button></div>`;
       html += `<p class="hint">Tap the ground to send ${esc(first(x))} somewhere, or tap a machine to give them a job.</p>`;
@@ -551,7 +584,7 @@ export class UI {
 
   private buildHtml(s: GameState): string {
     let html = this.head('Build', 'Choose a structure, then tap a spot in the compound.');
-    html += `<div class="bps">${BLUEPRINTS.map((b) => {
+    html += `<div class="bps">${BLUEPRINTS.filter((b) => blueprintAvailable(s, b.type)).map((b) => {
       const short = Object.keys(missingItems(s.inventory, b.inputs)).length > 0;
       return `<button class="bp ${short ? 'short' : ''}" data-a="bp" data-v="${b.type}">
         <b>${esc(b.name)}</b><span class="size">${b.w}×${b.h}</span>
@@ -722,11 +755,19 @@ export class UI {
     const lootLeft = Object.values(ls.loot).reduce((a, b) => a + (b ?? 0), 0);
     const richness = ls.visits === 0 ? 'Unexplored' : lootLeft > 15 ? 'Still worth a look' : lootLeft > 4 ? 'Mostly picked over' : 'Stripped bare';
     const back = s.minute + plan.total;
+    const hz = locationHazard(s, d.dest);
+    const route = s.world.routes[d.dest];
     let html = `<div class="ph"><div><h2>Expeditions</h2><p class="sub">Pick a destination, a team of up to ${MAX_TEAM}, and supplies.</p></div><button class="x" data-a="modal-close" aria-label="Close">${icon('close')}</button></div>`;
     html += `<div class="exp-grid"><div class="exp-map">${this.mapSvg(s)}<div class="loc-tabs">${Object.values(LOCATIONS)
-      .map((l) => `<button class="${d.dest === l.id ? 'on' : ''}" data-a="exp-dest" data-v="${l.id}">${esc(l.name)}</button>`)
+      .map((l) => {
+        const r = s.world.routes[l.id];
+        const cut = r && r.until > s.minute;
+        return `<button class="${d.dest === l.id ? 'on' : ''} ${cut ? 'cut' : ''}" data-a="exp-dest" data-v="${l.id}">${esc(l.name)}${cut ? ' ✕' : ''}</button>`;
+      })
       .join('')}</div></div><div class="exp-plan">`;
-    html += `<div class="dest"><h3>${esc(loc.name)}</h3><p>${esc(loc.blurb)}</p><div class="tags"><span>${icon('stores')}${esc(loc.hint)}</span><span>${icon('clock')}${formatDuration(plan.leg)} each way</span><span class="${loc.risk > 0.15 ? 'tone-warn' : ''}">${icon('warn')}${loc.risk > 0.17 ? 'Risky' : loc.risk > 0.13 ? 'Some risk' : 'Low risk'}</span><span>${esc(richness)}</span></div></div>`;
+    html += `<div class="dest"><h3>${esc(loc.name)}</h3><p>${esc(loc.blurb)}</p><div class="tags"><span>${icon('stores')}${esc(loc.hint)}</span><span>${icon('clock')}${formatDuration(plan.leg)} each way</span><span class="${loc.risk > 0.15 ? 'tone-warn' : ''}">${icon('warn')}${loc.risk > 0.17 ? 'Risky' : loc.risk > 0.13 ? 'Some risk' : 'Low risk'}</span><span>${esc(richness)}</span>${hz.notes.map((n) => `<span class="tone-warn">${icon('warn')}${esc(n)}</span>`).join('')}</div>${
+      route && route.until > s.minute ? `<p class="tone-bad">${icon('warn')} ${esc(route.reason)} Clears ~Day ${dayOf(route.until)} ${clockString(route.until)}.</p>` : ''
+    }</div>`;
     html += `<h4>Team</h4><div class="team-pick">${presentSurvivors(s)
       .map((x) => {
         const on = d.members.includes(x.id);
@@ -762,7 +803,7 @@ export class UI {
         <button class="go" data-a="modal-close">Resume</button>
         <button class="ghost" data-a="modal" data-v="objectives">${icon('target')}Objectives</button>
         <button class="ghost" data-a="modal" data-v="help">${icon('log')}How to play</button>
-        <button class="ghost danger" data-a="modal" data-v="confirmNew">Start a new game</button>
+        <button class="ghost danger" data-a="modal" data-v="scenario">Start a new game</button>
       </div>`;
   }
 
@@ -899,6 +940,37 @@ export class UI {
         break;
       }
       case 'newgame': c.newGame(); break;
+      case 'begin': c.newGame(draftOptions(this.draft)); break;
+      case 'draft': {
+        const [k, val] = v.split('|');
+        const d = this.draft;
+        if (k === 'pick') {
+          d.random = val === 'random';
+          if (!d.random) d.catastrophe = val as CatastropheId;
+        } else if (k === 'main') {
+          d.catastrophe = val as CatastropheId;
+          d.extra = d.extra.filter((x) => x !== val);
+        } else if (k === 'extra') d.extra = d.extra.includes(val as CatastropheId) ? d.extra.filter((x) => x !== val) : [...d.extra, val as CatastropheId];
+        else if (k === 'view') d.view = val as NewGameDraft['view'];
+        else if (k === 'difficulty') d.difficulty = val as NewGameDraft['difficulty'];
+        else if (k === 'supplies') d.supplies = val as NewGameDraft['supplies'];
+        else if (k === 'director') d.director = val as NewGameDraft['director'];
+        break;
+      }
+      case 'quarantine': {
+        const x = getSurvivor(s, v);
+        if (x) run({ type: 'quarantine', survivorId: v, value: !x.quarantined });
+        break;
+      }
+      case 'sb-add': run({ type: 'sandbox', action: { kind: 'addCatastrophe', catastrophe: v as CatastropheId } }); break;
+      case 'sb-cond': {
+        const [key, delta] = v.split('|') as ['radiation' | 'horde' | 'threat' | 'flood', string];
+        run({ type: 'sandbox', action: { kind: 'setCondition', key, value: s.world[key] + Number(delta) } });
+        break;
+      }
+      case 'sb-event': run({ type: 'sandbox', action: { kind: 'triggerEvent', eventId: v } }); break;
+      case 'sb-weather': run({ type: 'sandbox', action: { kind: 'weather', weather: v as 'squall' | 'rain' | 'clear' } }); break;
+      case 'sb-supplies': run({ type: 'sandbox', action: { kind: 'supplies', amount: v as 'some' | 'lots' } }); break;
     }
     this.update(true);
   }
