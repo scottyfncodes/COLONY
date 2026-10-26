@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0" stop-color="#2e261d"/>
+      <stop offset="1" stop-color="#120f0c"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#f2b544" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#f2b544" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <!-- ground diamond -->
+  <path d="M256 300 L436 390 L256 480 L76 390 Z" fill="#2a231b" stroke="#4a3d2e" stroke-width="4"/>
+  <!-- light pool -->
+  <ellipse cx="256" cy="372" rx="170" ry="70" fill="url(#glow)"/>
+  <!-- building: isometric block -->
+  <path d="M256 150 L386 215 L256 280 L126 215 Z" fill="#f2b544"/>
+  <path d="M126 215 L256 280 L256 400 L126 335 Z" fill="#c9832a"/>
+  <path d="M386 215 L256 280 L256 400 L386 335 Z" fill="#8f5a1e"/>
+  <!-- lit doorway and window -->
+  <path d="M180 300 L212 316 L212 362 L180 346 Z" fill="#ffe7a8"/>
+  <path d="M296 300 L344 276 L344 300 L296 324 Z" fill="#3a2a17"/>
+  <!-- exhaust stack + smoke -->
+  <ellipse cx="320" cy="214" rx="20" ry="9" fill="#c9832a" opacity="0.6"/>
+  <path d="M302 210 L322 220 L322 150 L302 140 Z" fill="#3a3530"/>
+  <path d="M322 220 L338 212 L338 142 L322 150 Z" fill="#26221e"/>
+  <path d="M302 140 L318 132 L338 142 L322 150 Z" fill="#141210"/>
+  <circle cx="334" cy="112" r="16" fill="#6d665c" opacity="0.75"/>
+  <circle cx="362" cy="84" r="22" fill="#6d665c" opacity="0.5"/>
+  <circle cx="396" cy="58" r="27" fill="#6d665c" opacity="0.28"/>
+  <!-- fence posts -->
+  <g stroke="#7a705f" stroke-width="6" stroke-linecap="round">
+    <path d="M96 400 L96 368"/><path d="M136 420 L136 388"/><path d="M416 400 L416 368"/><path d="M376 420 L376 388"/>
+  </g>
+</svg>

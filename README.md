@@ -2,7 +2,7 @@
 
 An original isometric survival-engineering game for the browser. Six survivors, a dead industrial compound, and seven days to make it work: scavenge, repair, dismantle, repurpose, build, and keep everyone fed, watered and alive through a storm.
 
-Runs on desktop and phones (iPhone Safari included). No accounts, servers or external assets — everything is drawn procedurally and saved locally in the browser.
+Runs on desktop and phones (iPhone Safari included), and can be added to the home screen as an app (Share → Add to Home Screen). No accounts, servers or external assets — everything is drawn procedurally and saved locally in the browser.
 
 ## Quick start
 
@@ -21,6 +21,7 @@ npm run dev        # http://localhost:5173
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run e2e` | Browser end-to-end run at desktop and iPhone sizes (needs `npm run build` first and Playwright's Chromium) |
 | `npm run check` | typecheck + lint + tests + build |
+| `node scripts/icons.mjs` | Regenerate the home-screen PNG icons from `public/icon.svg` |
 | `npm run build:single` | One self-contained HTML file (`dist-single/`), plus a page fragment for publishing as a claude.ai Artifact |
 
 `dist/` is a static site; it can be hosted anywhere (Vercel, Netlify, GitHub Pages). Asset paths are relative.
