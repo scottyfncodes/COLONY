@@ -1,6 +1,6 @@
 import './style.css';
 import { blueprint } from './sim/actions';
-import { dispatch, isPaused, newGame, step, validatePlacement } from './sim/sim';
+import { continueEndless, dispatch, isPaused, newGame, settleDown, step, validatePlacement } from './sim/sim';
 import { clearSave, loadFrom, saveTo } from './sim/save';
 import { SPEEDS, type SpeedIndex } from './sim/time';
 import type { Command, CommandResult, GameState, ObjectType } from './sim/types';
@@ -8,6 +8,9 @@ import type { NewGameOptions } from './sim/catastrophes';
 import { Renderer, type ViewState } from './render/renderer';
 import { injectIcons } from './ui/icons';
 import { UI, type Controller, type ModalKind, type PanelKind } from './ui/ui';
+import { SoundEngine, type Cue } from './audio/audio';
+import { objectiveTarget } from './sim/scenario';
+import { loadHistory, recordRun, type RunRecord } from './ui/history';
 
 /** localStorage can be missing or throw (private mode, sandboxed frames); fall back to memory. */
 const store: Storage = (() => {
@@ -35,19 +38,24 @@ class Game implements Controller {
   placing: ObjectType | null = null;
   assignee: string | null = null;
   saveStatus = 'Autosaves to this browser';
+  muted = store.getItem('colony.muted') === '1';
+  sound = new SoundEngine(this.muted);
+  history: RunRecord[] = loadHistory(store);
   renderer: Renderer;
   ui: UI;
   private acc = 0;
   private last = 0;
   private lastUi = 0;
   private lastSave = 0;
+  private seen = { log: 0, pending: '', result: false, climax: false, cueAt: 0, built: 0, repaired: 0 };
 
   constructor(private root: HTMLElement, canvas: HTMLCanvasElement) {
     const loaded = loadFrom(store);
     let note = '';
     if (loaded.ok) {
       this.state = loaded.state;
-      note = 'Welcome back — your settlement was restored.';
+      if (!this.state.result && !this.state.events.pending) this.modal = 'recap';
+      else note = 'Welcome back — your settlement was restored.';
     } else {
       if (loaded.reason !== 'No save found.') note = `${loaded.reason} Starting a fresh game.`;
       this.state = newGame();
@@ -61,9 +69,18 @@ class Game implements Controller {
     this.renderer.camera.zoom = small ? 0.6 : 1.05;
     this.renderer.camera.centerOn(small ? 14 : 15.5, small ? 13 : 14);
     if (note) setTimeout(() => this.ui.toast(note, loaded.ok), 400);
+    this.resetSeen();
+    // Audio can only start from a user gesture (iOS especially).
+    const unlock = () => this.sound.unlock();
+    window.addEventListener('pointerdown', unlock, true);
+    window.addEventListener('keydown', unlock, true);
     this.bindInput(canvas);
     window.addEventListener('resize', () => this.resize());
-    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && this.save());
+    document.addEventListener('visibilitychange', () => {
+      const hidden = document.visibilityState === 'hidden';
+      if (hidden) this.save();
+      this.sound.setHidden(hidden);
+    });
     window.addEventListener('pagehide', () => this.save());
     requestAnimationFrame((t) => this.frame(t));
   }
@@ -97,6 +114,8 @@ class Game implements Controller {
       }
     }
     this.renderer.render(this.state, this.view, Math.min(1, this.acc), t);
+    this.sound.update(this.state, dt, isPaused(this.state) ? 0 : this.speed);
+    this.watch(t);
     if (t - this.lastUi > 180) {
       this.lastUi = t;
       this.ui.update();
@@ -106,6 +125,109 @@ class Game implements Controller {
       this.save();
     }
     requestAnimationFrame((tt) => this.frame(tt));
+  }
+
+  private resetSeen(): void {
+    const s = this.state;
+    this.seen = { log: s.log.length, pending: s.events.pending?.id ?? '', result: !!s.result, climax: s.minute >= s.world.climax.at && !s.world.climax.resolved, cueAt: 0, built: s.stats.built, repaired: s.stats.repaired };
+  }
+
+  /** Turn what just happened in the simulation into sound, vibration and the run history. */
+  private watch(t: number): void {
+    const s = this.state;
+    const seen = this.seen;
+    if (s.log.length < seen.log) seen.log = 0;
+    if (s.log.length > seen.log && t - seen.cueAt > 400) {
+      const fresh = s.log.slice(seen.log);
+      seen.log = s.log.length;
+      let cue: Cue | null = null;
+      if (fresh.some((e) => / has died | has left/.test(e.text))) cue = 'death';
+      else if (fresh.some((e) => e.tone === 'bad')) cue = 'bad';
+      else if (fresh.some((e) => e.tone === 'warn')) cue = 'warn';
+      else if (fresh.some((e) => / dawns\./.test(e.text))) cue = 'day';
+      else if (fresh.some((e) => e.tone === 'good')) cue = 'good';
+      if (cue) {
+        this.cue(cue);
+        seen.cueAt = t;
+        if (cue === 'death') this.buzz([90, 60, 180]);
+        else if (cue === 'bad') this.buzz([40]);
+      }
+    }
+    if (s.stats.built > seen.built) this.cue('build');
+    else if (s.stats.repaired > seen.repaired) this.cue('complete');
+    seen.built = s.stats.built;
+    seen.repaired = s.stats.repaired;
+    const pending = s.events.pending?.id ?? '';
+    if (pending && pending !== seen.pending) {
+      this.cue('event');
+      this.buzz([30, 40, 30]);
+    }
+    seen.pending = pending;
+    const live = s.minute >= s.world.climax.at && !s.world.climax.resolved;
+    if (live && !seen.climax) this.cue('climax');
+    seen.climax = live;
+    if (!!s.result !== seen.result) {
+      seen.result = !!s.result;
+      if (s.result) {
+        this.history = recordRun(store, s);
+        this.cue(s.result.status === 'won' ? 'complete' : 'death');
+        this.save();
+      }
+    }
+  }
+
+  private buzz(pattern: number[]): void {
+    if (this.muted) return;
+    try {
+      navigator.vibrate?.(pattern);
+    } catch {
+      /* unsupported */
+    }
+  }
+
+  cue(c: Cue): void {
+    this.sound.play(c);
+  }
+
+  toggleMute(): void {
+    this.muted = !this.muted;
+    this.sound.setMuted(this.muted);
+    this.setPref('colony.muted', this.muted ? '1' : null);
+    if (!this.muted) {
+      this.sound.unlock();
+      this.cue('good');
+    }
+    this.ui.toast(this.muted ? 'Sound off' : 'Sound on');
+  }
+
+  pref(key: string): string | null {
+    return store.getItem(key);
+  }
+
+  setPref(key: string, value: string | null): void {
+    try {
+      if (value === null) store.removeItem(key);
+      else store.setItem(key, value);
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
+  continueEndless(): void {
+    const r = continueEndless(this.state);
+    this.ui.toast(r.message, r.ok);
+    if (!r.ok) return;
+    this.ui.resetEnd();
+    this.resetSeen();
+    this.modal = null;
+    this.speed = 1;
+    this.cue('day');
+    this.save();
+  }
+
+  settle(): void {
+    settleDown(this.state);
+    this.ui.update(true);
   }
 
   // ------------------------------------------------------------ controller API
@@ -125,9 +247,15 @@ class Game implements Controller {
     if (this.root.clientWidth >= 760) return;
     const cam = this.renderer.camera;
     const p = cam.toScreen((tx - ty) * 32, (tx + ty) * 16);
-    const limit = cam.height * 0.4;
+    // Visible band: below the HUD and alerts, above where the bottom panel will sit.
+    const rect = (id: string) => document.getElementById(id)?.getBoundingClientRect();
+    const alerts = rect('alerts');
+    const top = (alerts && alerts.height ? alerts.bottom : (rect('objective')?.bottom ?? 140)) + 24;
+    const panelMax = window.innerHeight * (this.root.classList.contains('coach-on') ? 0.38 : 0.52);
+    const bottom = (rect('dock')?.top ?? cam.height * 0.85) - 8 - panelMax;
+    const target = bottom > top ? (top + bottom) / 2 : top;
     const dx = p.x < 40 || p.x > cam.width - 40 ? cam.width / 2 - p.x : 0;
-    const dy = p.y > limit || p.y < 140 ? cam.height * 0.3 - p.y : 0;
+    const dy = p.y < top || p.y > Math.max(bottom, top + 10) ? target - p.y : 0;
     if (dx || dy) cam.pan(dx, dy);
   }
 
@@ -176,6 +304,7 @@ class Game implements Controller {
     if (!g || !this.placing) return;
     const r = this.command({ type: 'build', blueprint: this.placing, x: g.x, y: g.y, assigneeId: this.assignee });
     this.ui.toast(r.message, r.ok);
+    this.cue(r.ok ? 'place' : 'error');
     if (r.ok) {
       this.placing = null;
       this.view.ghost = null;
@@ -208,6 +337,14 @@ class Game implements Controller {
     this.assignee = null;
     this.speed = 1;
     this.ui.resetEnd();
+    this.resetSeen();
+    if (opts && this.pref('colony.coach') !== 'done') {
+      this.ui.startCoach();
+      const t = objectiveTarget(this.state);
+      const o = t?.kind === 'object' ? this.state.objects.find((x) => x.id === t.id) : undefined;
+      // No panel yet: centre it so the arrow sits clear of the HUD and the tutorial card.
+      if (o) this.renderer.camera.centerOn(o.x + o.w / 2, o.y + o.h / 2);
+    }
     this.save();
     this.ui.update(true);
   }
@@ -380,6 +517,9 @@ class Game implements Controller {
           break;
         case 'l':
           this.openPanel(this.panel === 'log' ? null : 'log');
+          break;
+        case 'm':
+          this.toggleMute();
           break;
         case '+':
         case '=':

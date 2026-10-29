@@ -20,6 +20,8 @@ export interface ViewState {
   selectedObject: string | null;
   ghost: { type: ObjectType; x: number; y: number; valid: boolean } | null;
   hover: { x: number; y: number } | null;
+  /** What the current objective points at: marked with a bouncing arrow. */
+  beacon?: { kind: 'object' | 'survivor'; id: string } | null;
 }
 
 interface Particle {
@@ -633,6 +635,14 @@ export class Renderer {
       ctx.fillRect(0, 0, cam.width, cam.height);
       ctx.globalCompositeOperation = 'source-over';
     }
+    // Golden hours: low warm sun after dawn and before dusk.
+    const golden = mod >= 7 && mod < 8.5 ? (8.5 - mod) / 1.5 : mod > 16 && mod <= 18 ? (mod - 16) / 2 : 0;
+    if (golden > 0 && dark === 0) {
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = `rgba(255,196,140,${0.22 * golden})`;
+      ctx.fillRect(0, 0, cam.width, cam.height);
+      ctx.globalCompositeOperation = 'source-over';
+    }
     if (night <= 0.02) return;
     const L = this.lctx;
     const lw = this.light.width;
@@ -695,6 +705,48 @@ export class Renderer {
 
   // ---------------------------------------------------------------- overlays
 
+  /** A gold arrow bobbing over whatever the objective line is talking about. */
+  private drawBeacon(ctx: Ctx, state: GameState, view: ViewState, t: number): void {
+    const b = view.beacon;
+    if (!b || view.selectedObject === b.id || view.selectedSurvivor === b.id) return;
+    const cam = this.camera;
+    let w: Vec;
+    if (b.kind === 'object') {
+      const o = state.objects.find((x) => x.id === b.id);
+      if (!o) return;
+      w = iso(o.x + o.w / 2, o.y + o.h / 2, objectHeight(o) + 30);
+    } else {
+      const v = state.survivors.find((x) => x.id === b.id);
+      if (!v || !v.alive || v.away) return;
+      w = iso(v.x, v.y, 52);
+    }
+    const p = cam.toScreen(w.x, w.y);
+    const bob = Math.sin(t * 4.5) * 5;
+    const k = Math.max(0.8, Math.min(1.3, cam.zoom));
+    const x = p.x;
+    const y = p.y + bob - 6;
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x - 11 * k, y - 14 * k);
+    ctx.lineTo(x + 11 * k, y - 14 * k);
+    ctx.lineTo(x + 11 * k, y - 4 * k);
+    ctx.lineTo(x + 5 * k, y - 4 * k);
+    ctx.lineTo(x, y + 6 * k);
+    ctx.lineTo(x - 5 * k, y - 4 * k);
+    ctx.lineTo(x - 11 * k, y - 4 * k);
+    ctx.closePath();
+    ctx.shadowColor = 'rgba(242,181,68,0.7)';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#f2b544';
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#2a1d0c';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   private drawOverlays(ctx: Ctx, state: GameState, view: ViewState, t: number): void {
     const cam = this.camera;
     const showAll = cam.zoom > 0.6;
@@ -720,6 +772,7 @@ export class Renderer {
         drawBadge(ctx, s.x, s.y - 4 + Math.sin(t * 3 + o.x) * 1.5, badge.color, badge.glyph);
       }
     }
+    this.drawBeacon(ctx, state, view, t);
     // Names over survivors when zoomed in or selected.
     ctx.font = '600 11px "Barlow Condensed", system-ui, sans-serif';
     ctx.textAlign = 'center';

@@ -13,6 +13,7 @@ import {
 } from './jobs';
 import { chance, nextRandom } from './rng';
 import { mods, radiationNow } from './catastrophes';
+import { grieve, socialMorale } from './social';
 import { hourOf, isNight, minuteOfDay } from './time';
 import { accessTiles, BUILDINGS, findPath, isSheltered, nearestWalkable, walkable, type Building } from './world';
 import type { GameState, Items, Job, NeedAction, Point, Survivor, WorldObject } from './types';
@@ -148,6 +149,7 @@ export function updateNeeds(state: GameState, s: Survivor, carry?: Items, outdoo
   target += s.health < 50 ? -10 : 0;
   if (state.power.supply > 0 && !state.power.deficit) target += 6;
   if (state.survivors.some((o) => o.alive && !o.away && o.trait === 'empath' && o.id !== s.id)) target += 8;
+  target += socialMorale(state, s);
   target += Number(state.flags.moraleMod ?? 0) + m.morale;
   target -= state.stats.deaths.length * 12;
   if (stormActive(state)) target -= 6;
@@ -172,7 +174,7 @@ export function killSurvivor(state: GameState, s: Survivor, cause: string): void
   s.jobId = null;
   state.stats.deaths.push({ name: s.name, cause, minute: state.minute });
   log(state, `${s.name} has died of ${cause}.`, 'bad');
-  for (const o of state.survivors) if (o.alive) o.morale = Math.max(0, o.morale - 15);
+  grieve(state, s);
 }
 
 // ---------------------------------------------------------------- movement

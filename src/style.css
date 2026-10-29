@@ -335,19 +335,28 @@ h4 {
   background: rgba(232, 163, 61, 0.15);
 }
 
-#objective button {
+#objective .obj-pill {
   display: flex;
   align-items: center;
-  gap: 7px;
-  max-width: min(100%, 520px);
-  padding: 6px 10px 6px 8px;
+  max-width: min(100%, 560px);
   background: var(--panel);
   border: 1px solid rgba(232, 163, 61, 0.35);
   border-radius: 99px;
   font-size: 13.5px;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+}
+#objective .obj-go {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 6px 6px 8px;
   text-align: left;
+}
+#objective .obj-count {
+  padding: 6px 11px 6px 8px;
+  border-left: 1px solid var(--line);
 }
 #objective .ic {
   color: var(--accent-2);
@@ -1683,7 +1692,7 @@ select {
   max-width: 100%;
   min-width: 0;
 }
-#objective button {
+#objective .obj-pill {
   max-width: 100%;
 }
 .obj-text {
@@ -1739,6 +1748,7 @@ select {
 }
 .sc-body {
   display: grid;
+  align-content: start;
   gap: 2px;
   padding: 8px 10px 10px;
 }
@@ -2005,4 +2015,252 @@ select {
 }
 .sandbox .step {
   min-width: 0;
+}
+
+/* ------------------------------------------------------------ resource help */
+
+.res-btn .chip {
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.res-btn .chip.open {
+  border-color: var(--accent-2);
+  background: rgba(242, 181, 68, 0.14);
+}
+.chip.low {
+  animation: lowpulse 1.6s ease-in-out infinite;
+}
+@keyframes lowpulse {
+  50% {
+    background: rgba(232, 96, 74, 0.38);
+  }
+}
+#respop {
+  width: min(100%, 420px);
+}
+.rp-card {
+  background: var(--panel-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 9px 11px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 13.5px;
+  animation: rise 0.15s ease-out;
+}
+.rp-card p {
+  margin: 4px 0;
+  color: var(--muted);
+}
+.rp-card .rp-line {
+  color: var(--text);
+  font-weight: 500;
+}
+.rp-h {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.rp-h b {
+  font-family: var(--display);
+  font-size: 17px;
+}
+.rp-amt {
+  margin-left: auto;
+  font-family: var(--display);
+  font-size: 16px;
+  color: var(--accent-2);
+}
+.rp-h .x {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+}
+
+/* ------------------------------------------------------------ tutorial */
+
+#coach {
+  width: min(100%, 460px);
+  align-self: center;
+}
+.coach-card {
+  background: linear-gradient(180deg, rgba(58, 42, 18, 0.96), rgba(32, 26, 18, 0.96));
+  border: 1px solid rgba(242, 181, 68, 0.6);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5);
+  animation: rise 0.2s ease-out;
+}
+.coach-card p {
+  margin: 0 0 8px;
+  font-size: 14.5px;
+  line-height: 1.4;
+}
+.coach-card b {
+  color: var(--accent-2);
+}
+.coach-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.coach-foot .go {
+  padding: 6px 16px;
+}
+.coach-foot .lnk {
+  font-size: 13px;
+  color: var(--muted);
+}
+.dots {
+  display: inline-flex;
+  gap: 5px;
+}
+.dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 236, 200, 0.18);
+}
+.dots i.done {
+  background: rgba(242, 181, 68, 0.5);
+}
+.dots i.on {
+  background: var(--accent-2);
+}
+.coach-glow {
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 0 0 2px var(--accent-2), 0 0 18px rgba(242, 181, 68, 0.6) !important;
+  animation: coachglow 1.2s ease-in-out infinite;
+  border-radius: 10px;
+}
+@keyframes coachglow {
+  50% {
+    box-shadow: 0 0 0 3px var(--accent-2), 0 0 26px rgba(242, 181, 68, 0.85);
+  }
+}
+
+/* ------------------------------------------------------------ sheet handle */
+
+.grab {
+  display: none;
+}
+@media (max-width: 759px) {
+  .grab {
+    display: flex;
+    justify-content: center;
+    margin: -8px -12px 4px;
+    padding: 6px 0 8px;
+    cursor: grab;
+    touch-action: none;
+  }
+  .grab span {
+    width: 40px;
+    height: 5px;
+    border-radius: 3px;
+    background: rgba(255, 236, 200, 0.28);
+  }
+  #panel {
+    transition: max-height 0.2s ease, transform 0.2s ease;
+  }
+  .panel-peek #panel {
+    max-height: 86px;
+    overflow: hidden;
+  }
+}
+
+/* ------------------------------------------------------------ relationships, records */
+
+.rels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 3px;
+  border-radius: 99px;
+  background: rgba(143, 207, 99, 0.12);
+  border: 1px solid rgba(143, 207, 99, 0.35);
+  font-size: 13px;
+}
+.rel.close {
+  background: rgba(143, 207, 99, 0.22);
+}
+.rel.rival {
+  background: rgba(232, 96, 74, 0.14);
+  border-color: rgba(232, 96, 74, 0.45);
+}
+.rel img {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+}
+.rel small {
+  color: var(--muted);
+}
+.sc-best {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--good);
+}
+.sc-best.lost {
+  color: var(--dim);
+}
+.sc-best .ic {
+  width: 13px;
+  height: 13px;
+}
+.go.endless {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 10px 0 6px;
+}
+.go.endless small {
+  font-family: var(--body);
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+.recap-next {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(242, 181, 68, 0.1);
+  border: 1px solid rgba(242, 181, 68, 0.35);
+}
+.recap-next .ic {
+  color: var(--accent-2);
+}
+.menu-list .ghost small {
+  color: var(--dim);
+}
+
+/* Tutorial alongside an open panel on phones: compact card, shorter panel, nothing over the HUD. */
+@media (max-width: 759px) {
+  .panel-open.coach-on #panel {
+    max-height: 38vh;
+    max-height: 38dvh;
+  }
+  .panel-open #coach .coach-foot {
+    display: none;
+  }
+  .panel-open .coach-card {
+    padding: 8px 11px;
+  }
+  .panel-open .coach-card p {
+    margin: 0;
+    font-size: 13.5px;
+  }
 }

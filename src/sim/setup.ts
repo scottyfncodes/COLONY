@@ -1,5 +1,6 @@
 import { rawCapacity } from './inventory';
 import { hashNoise } from './rng';
+import { seedBonds } from './social';
 import { START_MINUTE, MINUTES_PER_DAY } from './time';
 import type { GameState, Items, ObjectType, Role, Skill, Survivor, TraitId, WorldConditions, WorldObject } from './types';
 
@@ -223,8 +224,7 @@ export function createGame(seed = 1): GameState {
     world: undefined as unknown as WorldConditions,
   };
   state.world = defaultWorld(state.weather);
-  // Relationship foundation: everyone starts with mild trust in each other.
-  for (const a of state.survivors) for (const b of state.survivors) if (a !== b) a.relationships[b.id] = 10 + Math.floor(hashNoise(seed, a.name.length * 31 + b.name.length) * 20);
+  seedBonds(state);
   state.water.rawCap = rawCapacity(state);
   return state;
 }

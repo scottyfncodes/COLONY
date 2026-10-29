@@ -193,6 +193,8 @@ export function evaluateEnd(s: GameState, early = false): ScenarioResult {
   if (working.length) lines.push(`Working infrastructure: ${working.map((o) => OBJECT_DEFS[o.type].name).join(', ')}.`);
   if (s.stats.stormDamage.length) lines.push(`Storm damage: ${s.stats.stormDamage.join('; ')}.`);
 
+  const endless = !!s.flags.endless;
+  if (endless) lines.unshift(`Endured ${dayOf(s.minute) - 1} days — the first week graded ${String(s.flags.endlessGrade ?? '?').toLowerCase()}.`);
   let status: ScenarioResult['status'] = 'won';
   let grade = '';
   let headline = '';
@@ -200,6 +202,7 @@ export function evaluateEnd(s: GameState, early = false): ScenarioResult {
     status = 'lost';
     grade = 'Settlement lost';
     headline = alive === 0 ? 'Nobody is left at the compound.' : 'Too few remain to keep the compound alive.';
+    if (endless) headline = `Held out for ${dayOf(s.minute) - 1} days before the end.`;
   } else if (systems < 2) {
     status = 'lost';
     grade = 'Abandoned';
@@ -221,4 +224,33 @@ export function evaluateEnd(s: GameState, early = false): ScenarioResult {
     lines,
     objectives: objs.map((o) => ({ id: o.id, label: o.label, done: o.done })),
   };
+}
+
+/** What the current objective points at, so the view can mark it and the player can jump to it. */
+export function objectiveTarget(s: GameState): { kind: 'object' | 'survivor'; id: string } | null {
+  const sys = systemStatus(s);
+  const obj = (o: { id: string } | undefined) => (o ? { kind: 'object' as const, id: o.id } : null);
+  const who = (x: { id: string } | undefined) => (x ? { kind: 'survivor' as const, id: x.id } : null);
+  const find = (type: string, states?: string[]) => s.objects.find((o) => o.type === type && (!states || states.includes(o.state)));
+  if (s.weather.kind === 'storm') return null;
+  if (s.survivors.some((x) => x.alive && x.trapped)) return obj(s.objects.find((o) => o.type === 'rubble' && o.state === 'pile' && o.data.trapped));
+  const burning = s.objects.find((o) => o.data.burning);
+  if (burning) return obj(burning);
+  const spreading = s.survivors.find((x) => x.alive && !x.away && x.illness?.kind === 'fever' && x.illness.stage === 'sick' && !x.quarantined);
+  if (spreading) return who(spreading);
+  const bitten = s.survivors.find((x) => x.alive && !x.away && x.illness?.kind === 'bite');
+  if (bitten) return who(bitten);
+  if (isActive(s, 'collapse') && s.world.threat >= 50) return obj(find('gate', ['damaged', 'broken']));
+  const broken = s.objects.find((o) => ['flooded', 'broken'].includes(o.state) && ['generator', 'waterPump'].includes(o.type));
+  if (s.weather.stormResolved && s.stats.stormDamage.length && broken) return obj(broken);
+  if (count(s, 'water') < 10 && !sys.treatment) return obj(count(s, 'rawWater') >= 8 ? find('table') : find('waterPump'));
+  const gen = find('generator');
+  if (gen && gen.state !== 'operational' && gen.state !== 'dismantled') return obj(gen);
+  if (!sys.source) return obj(find('waterPump', ['broken', 'flooded', 'damaged']));
+  if (!sys.treatment) return null;
+  if (sys.beds < 3 && !s.objectivesDone.food) return obj(s.objects.find((o) => o.type === 'planter' && ['overgrown', 'empty', 'damaged'].includes(o.state)));
+  const hoursToStorm = (s.weather.stormStart - s.minute) / 60;
+  if (hoursToStorm < 48 && hoursToStorm > 0) return obj(s.objects.find((o) => OBJECT_DEFS[o.type].stormVulnerable && !o.reinforced && o.state === 'operational'));
+  if (count(s, 'fuel') < 3 && !sys.turbine) return obj(find('wreckedCar', ['wreck']) ?? find('drums', ['pile']));
+  return null;
 }

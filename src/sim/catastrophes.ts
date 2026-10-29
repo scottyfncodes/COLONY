@@ -5,7 +5,7 @@ import { getSurvivor } from './jobs';
 import { chance, randInt } from './rng';
 import { NEVER, obj } from './setup';
 import { presentSurvivors } from './survivors';
-import { dayOf, isNight, MINUTES_PER_DAY } from './time';
+import { dayOf, isNight, MINUTES_PER_DAY, SCENARIO_DAYS } from './time';
 import { isSheltered } from './world';
 import type { EventDef } from './events';
 import type { CatastropheId, ClimaxKind, Difficulty, GameMode, GameState, ItemId, LocationId, Survivor, WorldObject } from './types';
@@ -66,10 +66,10 @@ export function activeDefs(s: GameState): CatastropheDef[] {
   return ids.map((id) => CATASTROPHES[id]).filter(Boolean);
 }
 
-const DIFFICULTY: Record<Difficulty, { supplies: number; needs: number; adverse: number; label: string; blurb: string }> = {
-  easy: { supplies: 1.4, needs: 0.85, adverse: 0.6, label: 'Forgiving', blurb: 'More supplies, slower hunger and thirst, fewer crises.' },
-  normal: { supplies: 1, needs: 1, adverse: 1, label: 'Standard', blurb: 'The intended balance.' },
-  hard: { supplies: 0.7, needs: 1.15, adverse: 1.4, label: 'Brutal', blurb: 'Scarce supplies, faster needs, more crises.' },
+const DIFFICULTY: Record<Difficulty, { supplies: number; needs: number; adverse: number; loot: number; label: string; blurb: string }> = {
+  easy: { supplies: 1.4, needs: 0.85, adverse: 0.6, loot: 1.1, label: 'Forgiving', blurb: 'More supplies, slower hunger and thirst, fewer crises.' },
+  normal: { supplies: 1, needs: 1, adverse: 1, loot: 1, label: 'Standard', blurb: 'The intended balance.' },
+  hard: { supplies: 0.6, needs: 1.22, adverse: 1.6, loot: 0.8, label: 'Brutal', blurb: 'Half the supplies, thin scavenging, faster hunger and thirst, and crises come often. Expect losses.' },
 };
 
 export function difficultyInfo(d: Difficulty) {
@@ -88,7 +88,19 @@ export function mods(s: GameState): Mods {
   const diff = DIFFICULTY[s.world.difficulty] ?? DIFFICULTY.normal;
   m.needs *= diff.needs;
   m.adverse *= diff.adverse;
+  m.loot *= diff.loot;
+  const strain = endlessStrain(s);
+  if (strain) {
+    m.needs *= 1 + 0.04 * strain;
+    m.adverse *= 1 + 0.15 * strain;
+    m.loot *= Math.max(0.4, 1 - 0.06 * strain);
+  }
   return m;
+}
+
+/** Days past the first week in an endless run; pressure grows with each one. */
+export function endlessStrain(s: GameState): number {
+  return s.flags.endless ? Math.max(0, (s.minute - SCENARIO_DAYS * MINUTES_PER_DAY) / MINUTES_PER_DAY) : 0;
 }
 
 // ---------------------------------------------------------------- shared world helpers
@@ -719,6 +731,11 @@ export function applyScenario(s: GameState, o: NewGameOptions): void {
   w.director.intensity = o.director === 'calm' ? 0.5 : o.director === 'chaotic' ? 1.8 : 1;
   CATASTROPHES[o.catastrophe].setup(s);
   for (const x of w.extra) CATASTROPHES[x].setup(s);
+  if (o.difficulty === 'hard' && o.catastrophe === 'storm') {
+    // Brutal Storm Season: the storm comes a day early and stays longer.
+    s.weather.stormStart -= 20 * 60;
+    s.weather.stormEnd += 4 * 60 - 20 * 60;
+  }
   if (w.climax.kind === 'storm') {
     w.climax.at = s.weather.stormStart;
     w.climax.end = s.weather.stormEnd;

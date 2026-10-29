@@ -22,6 +22,7 @@ npm run dev        # http://localhost:5173
 | `npm run e2e` | Browser end-to-end run at desktop and iPhone sizes (needs `npm run build` first and Playwright's Chromium) |
 | `npm run check` | typecheck + lint + tests + build |
 | `node scripts/icons.mjs` | Regenerate the home-screen PNG icons from `public/icon.svg` |
+| `npx vite-node scripts/balance.ts [runs] [every] [difficulty] [scenario]` | Balance sweep: plays many seeded campaigns with the scripted player and reports survival rates (`every` = minutes between decisions; 30 ≈ expert, 240 ≈ casual) |
 | `npm run build:single` | One self-contained HTML file (`dist-single/`), plus a page fragment for publishing as a claude.ai Artifact |
 
 `dist/` is a static site; it can be hosted anywhere (Vercel, Netlify, GitHub Pages). Asset paths are relative.
@@ -35,8 +36,14 @@ npm run dev        # http://localhost:5173
 - **Build** places cots, planters, rain catchers, filters, a purifier, storage racks, a wind turbine and lamps. Placement is validated (inside the fence, unobstructed, never cuts off access).
 - **Expedition** opens a regional map: pick a destination, up to three survivors, and supplies (water, food, tools, meds). Teams travel, search, may face a decision on site, risk injury, and return with real cargo. Locations deplete.
 - **Speed**: pause / 1× / 3× / 9×. Decisions pause time automatically.
+- **The objective line** always names the most urgent problem, and a **gold arrow** bobs over the thing it means. Tap the line to jump there and open it; tap the count beside it for the full objective list.
+- **Tap any number in the top bar** to see what it is, how fast it is changing per hour, how long food and water will last, and where it comes from. Numbers pulse red when they are about to run out.
+- **Phone panels** have a drag handle: drag down to shrink a panel to a peek (again to close), up to expand, or tap the handle to toggle.
+- **First game:** a short guided tutorial walks through the first job, time speed, supplies and survivors. Each step finishes when you do the thing it asks. Skip it any time, or replay it from the menu.
+- **Coming back:** reopening a saved game shows a short recap (day, people, food and water days left, objectives, the next priority, recent events).
+- **Sound** is fully procedural (Web Audio, no files): wind and rain that follow the weather, the generator's hum, tool sounds while people work, night crickets, a tension drone as each catastrophe's climax nears, and cues for jobs, warnings, decisions and deaths. Phones that support it vibrate on bad news. Toggle sound from the menu or with `M`.
 
-**Controls** — drag to pan, pinch or scroll to zoom. Keyboard: `Space` pause, `1`–`3` speed, `WASD`/arrows pan, `B` build, `J` jobs, `E` expeditions, `L` log, `Esc` close.
+**Controls** — drag to pan, pinch or scroll to zoom. Keyboard: `Space` pause, `1`–`3` speed, `WASD`/arrows pan, `B` build, `J` jobs, `E` expeditions, `L` log, `M` sound, `Esc` close.
 
 ## The scenario
 
@@ -45,6 +52,12 @@ Start: Day 1, 07:00. Food for two days, water for one, a seized generator, a dea
 Primary objectives: keep everyone alive, establish reliable power (12 powered hours), safe water (40 L treated), a food supply (3 planters growing or 10 rations harvested), weather the storm, and reach the end of Day 7 with a functioning settlement. Optional: fit the salvaged engine, earn the Kesslers' trust, take no storm damage, run two lamps.
 
 The end screen grades the settlement (Thriving / Functioning / Holding on / Abandoned / Settlement lost) and lists every death and its cause, system status, storm damage and key choices.
+
+**Every game is laid out differently:** salvage heaps and wrecks are scattered to new, valid spots and their contents shuffled (from the seed, so a seed still replays exactly). Machines and buildings stay put.
+
+**Endless mode:** a settlement that survives the week can keep going. Each day past Day 7 raises needs (+4%/day), crisis pressure (+15%/day) and thins scavenging; rain keeps coming every two to three days. End the run from the menu (**Settle here**) or hold out until it falls; the grade then reports how many days it lasted.
+
+**Run history** (kept in this browser) shows your best grade on each scenario card. **Brutal** unlocks after a Functioning or Thriving settlement on Standard or harder; the custom sandbox can always use it.
 
 ## Catastrophes
 
@@ -94,6 +107,7 @@ Every control goes through a validated, clamped command, so it can only create s
 - **Power**: a diesel generator (condition, fuel, wear, servicing) and an optional wind turbine feed consumers by priority (pump → purifier → lamps → workbench → radio). A repaired battery bank stores surplus; with it, the generator runs on a charge/discharge cycle to save fuel. Shortfalls shut equipment off.
 - **Water**: the well pump (needs power) fills untreated storage, capped by the tank (40 L leaking, 300 L patched). Rain catchers collect rain. Sand filters (5–10 L/h, no power) and the purifier (15 L/h, 2 kW) produce drinking water. Drinking untreated water can make people sick.
 - **Food**: rations are eaten twice a day. Planters take a ration as seed stock, need watering (by hand or via irrigation from untreated storage) and yield after ~36 h.
+- **Relationships**: every pair of survivors has a bond, symmetric, from rivals to close friends. Each game seeds one strong friendship and one rivalry. Time spent near each other in decent spirits builds bonds; shared misery breeds friction, and surviving the climax together with no deaths brings everyone closer. Friends lift each other's morale and work 10% faster side by side; rivals cost morale and slow each other down. A death hurts everyone's morale, and those closest to the dead the most. Bonds are shown in the survivor panel.
 - **Survivors**: health, hydration, hunger, energy, morale, illness and injury. Skills (0–3) change work speed; unskilled hands on machinery occasionally get hurt. Each has a trait with a real effect (e.g. the Tinkerer recovers extra parts, the Night Owl works late, the Empath lifts morale). Beds matter. A medic treats injuries with medical supplies.
 - **Storm**: at its peak it damages every exposed, unreinforced object it touches (generator and pump flood, battery bank shorts, tank splits, crops flatten, turbine and lamps break, gate is wrenched loose). Reinforcing beforehand prevents it. Rain catchers and tanks fill up.
 - **The Kesslers**: trade, give freely, share a meal (needs the radio or a calm voice), or turn them away. Consequences play out later: a skilled mechanic may join, a supply crate may arrive, or raiders may come through a broken gate. Raiding their stockroom at the market changes the encounter.
@@ -112,7 +126,8 @@ src/
     infrastructure.ts power network, water chain, crops, weather, routine jobs
     expeditions.ts  locations, team dispatch, search, decisions, cargo
     events.ts       conditional events (storm, travellers, warnings) and decisions
-    scenario.ts     objectives, immediate goal, end evaluation
+    scenario.ts     objectives, immediate goal and what it points at, end evaluation
+    social.ts       relationships: bonds, friction, morale and work effects, grief
     catastrophes.ts catastrophe definitions, modifiers, world tick (radiation, noise, horde, threat, flood, fire), climaxes
     director.ts     event director: prerequisites, weights, cooldowns, warnings, mercy
     sandbox.ts      validated sandbox interventions
@@ -121,7 +136,8 @@ src/
     sim.ts          fixed-step `step()`, command `dispatch()`, placement rules
   render/         canvas isometric renderer: ground cache, procedural sprites,
                   depth sorting, particles, weather, lighting, overlays, picking
-  ui/             DOM HUD, panels, modals, icons, portraits
+  ui/             DOM HUD, panels, modals, icons, portraits, tutorial (coach.ts), run history
+  audio/          procedural Web Audio: ambience layers driven by game state, one-shot cues
   main.ts         game loop (fixed 1-minute steps, frame-rate independent), input, autosave
 tests/            Vitest suites + a scripted "bot" player
 scripts/e2e.mjs   Playwright run through the real UI
@@ -133,14 +149,14 @@ Saves are stored in `localStorage` (`colony.save`) every 15 s and when the page 
 
 ## Tests
 
-- `npm test`: 69 tests. `tests/catastrophes.test.ts` covers scenario initialisation; random selection; difficulty; rescue, levees and floods; radiation shelter; quarantine vs. spread; bites and treatment; noise and the horde; raid defence; fire; director prerequisites, warnings that are averted, and caps, cooldowns and rest periods across whole campaigns; sandbox validation; save v3→v4 migration; a full playthrough of every scenario with item conservation; and that the scenarios produce materially different campaigns. `tests/sim.test.ts` has the original 30+: inventory accounting and capacity, repair/dismantle/repurpose flows, material staging and refunds, construction and placement, power→pump→filter dependencies, fuel exhaustion, crops, survivor consumption and death causes, skill speed, time stepping and pausing, expeditions and location decisions, storm damage vs reinforcement, the travellers' consequences, save/load round-trip and determinism, rejection of malformed saves, and a full seven-day scripted playthrough with conservation checked every hour.
+- `npm test`: 79 tests. `tests/replay.test.ts` covers seeded layouts (varied, deterministic, never blocking), relationships (symmetry, seeded friendship and rivalry, grief scaling, work effects), endless mode (continue, rising strain, rain, save round-trip, settling, refusing a lost game), the objective target, and Brutal's earlier storm. `tests/catastrophes.test.ts` covers scenario initialisation; random selection; difficulty; rescue, levees and floods; radiation shelter; quarantine vs. spread; bites and treatment; noise and the horde; raid defence; fire; director prerequisites, warnings that are averted, and caps, cooldowns and rest periods across whole campaigns; sandbox validation; save v3→v4 migration; a full playthrough of every scenario with item conservation; and that the scenarios produce materially different campaigns. `tests/sim.test.ts` has the original 30+: inventory accounting and capacity, repair/dismantle/repurpose flows, material staging and refunds, construction and placement, power→pump→filter dependencies, fuel exhaustion, crops, survivor consumption and death causes, skill speed, time stepping and pausing, expeditions and location decisions, storm damage vs reinforcement, the travellers' consequences, save/load round-trip and determinism, rejection of malformed saves, and a full seven-day scripted playthrough with conservation checked every hour.
 - `npm run e2e` — launches the production build in Chromium at 1440×900 and at iPhone size with touch, then: dismisses the intro, taps the forklift in the world and queues a job, selects a survivor and taps to move, places and completes a building, sends an expedition and resolves its decision, fast-forwards through night and to the end, checks the summary, reload persistence, corrupted-save recovery, no page scroll, and no runtime errors.
 
 ## Known limitations
 
 - iPhone support is verified with Chromium's mobile emulation (touch events, 390×844 at 3×), not on a physical device or WebKit.
 - Expeditions use the regional map rather than real-time outdoor exploration; the expedition/survivor model is built so a walkable outdoor map can be added later.
-- Social simulation is a foundation only: morale is fully simulated (and drives desertion), but relationships are stored and have little effect yet.
 - There is no tactical combat. Raids, breaches and hordes are resolved through the defence rating and your decisions.
-- The scripted test player wins every scenario on Standard. Balance for human players needs playtesting, especially on Brutal.
-- One scenario and one compound layout; no audio yet.
+- Balance is tuned with the scripted player (`scripts/balance.ts`). Measured on Brutal with an attentive scripted player (12–16 seeds each): Blackout ~25% of settlements survive, Aftershock and The Fever ~67%, Storm Season ~75%, Black Rain ~90% and The Infected ~100% but almost always only "Holding on", with deaths common across the board. Standard is deliberately forgiving. Human playtesting should still refine it.
+- One compound: buildings and machines are fixed; only salvage moves between games.
+- iOS Safari blocks vibration, so haptics only work on Android browsers. Sound starts after the first tap (browsers require a gesture).
