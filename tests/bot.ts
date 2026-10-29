@@ -100,10 +100,11 @@ export function botThink(s: GameState): void {
   }
 }
 
-export function playBot(s: GameState, minutes: number): void {
+/** `every`: minutes between decisions. 30 plays like an attentive expert; a few hours like a casual player. */
+export function playBot(s: GameState, minutes: number, every = 30): void {
   for (let i = 0; i < minutes; i++) {
     if (s.result) return;
-    if (i % 30 === 0 || s.events.pending) botThink(s);
+    if (s.minute % every === 0 || s.events.pending) botThink(s);
     step(s);
   }
 }

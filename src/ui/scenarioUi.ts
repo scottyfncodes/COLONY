@@ -1,3 +1,4 @@
+import { brutalUnlocked, bestFor, shortGrade, type RunRecord } from './history';
 import { CATASTROPHE_IDS, CATASTROPHES, defense, difficultyInfo, isActive, locationHazard, radiationNow, type NewGameOptions } from '../sim/catastrophes';
 import { directorEvent } from '../sim/director';
 import { LOCATIONS } from '../sim/expeditions';
@@ -48,7 +49,14 @@ function seg<T extends string>(name: string, value: T, opts: [T, string][]): str
     .join('')}</div>`;
 }
 
-function card(id: CatastropheId | 'random', selected: boolean): string {
+function difficultySeg(d: NewGameDraft, unlocked: boolean): string {
+  const opts: [Difficulty, string][] = [['easy', 'Forgiving'], ['normal', 'Standard'], ['hard', unlocked ? 'Brutal' : 'Brutal 🔒']];
+  return `<div class="seg" role="radiogroup" aria-label="difficulty">${opts
+    .map(([v, label]) => `<button role="radio" aria-checked="${v === d.difficulty}" class="${v === d.difficulty ? 'on' : ''}" data-a="draft" data-v="difficulty|${v}" ${v === 'hard' && !unlocked ? 'disabled' : ''}>${label}</button>`)
+    .join('')}</div>`;
+}
+
+function card(id: CatastropheId | 'random', selected: boolean, best: RunRecord | null = null): string {
   if (id === 'random') {
     return `<button class="scard random ${selected ? 'on' : ''}" data-a="draft" data-v="pick|random" style="--acc:#cfc6b4;--hz:#3a342c">
       <span class="vig">${icon('dice', 'big')}</span>
@@ -58,11 +66,14 @@ function card(id: CatastropheId | 'random', selected: boolean): string {
   const d = CATASTROPHES[id];
   return `<button class="scard ${selected ? 'on' : ''}" data-a="draft" data-v="pick|${id}" style="--acc:${d.accent};--hz:${d.haze}">
     <span class="vig">${icon(SCENARIO_ICON[id], 'big')}</span>
-    <span class="sc-body"><span class="sc-kind">${esc(d.kind)}</span><b>${esc(d.name)}</b><span class="sc-tag">${esc(d.tagline)}</span></span>
+    <span class="sc-body"><span class="sc-kind">${esc(d.kind)}</span><b>${esc(d.name)}</b><span class="sc-tag">${esc(d.tagline)}</span>${
+      best ? `<span class="sc-best ${best.status}">${icon(best.status === 'won' ? 'check' : 'close')}Best: ${esc(shortGrade(best.grade))}${best.endless ? ` · ${best.days} days` : ''}</span>` : ''
+    }</span>
   </button>`;
 }
 
-export function scenarioSelectHtml(s: GameState, d: NewGameDraft): string {
+export function scenarioSelectHtml(s: GameState, d: NewGameDraft, history: RunRecord[] = []): string {
+  const unlocked = brutalUnlocked(history);
   const inProgress = s.minute > START_MINUTE + 30 && !s.result;
   const warn = inProgress ? `<p class="tone-warn small">Starting a new game replaces your current settlement.</p>` : '';
   if (d.view === 'custom') {
@@ -88,10 +99,11 @@ export function scenarioSelectHtml(s: GameState, d: NewGameDraft): string {
     ? `<div class="sc-detail" style="--acc:${sel.accent}"><b>${esc(sel.name)}</b><ul>${sel.pressures.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></div>`
     : `<div class="sc-detail" style="--acc:#cfc6b4"><b>Random</b><ul><li>Any of the six catastrophes, chosen for you</li><li>You find out which in the opening briefing</li></ul></div>`;
   return `<div class="ph"><div><p class="kicker">New game · seven days</p><h2>Choose your catastrophe</h2></div><button class="x" data-a="modal-close" aria-label="Close">${icon('close')}</button></div>
-    <div class="scards">${CATASTROPHE_IDS.map((id) => card(id, !d.random && d.catastrophe === id)).join('')}${card('random', d.random)}</div>
+    <div class="scards">${CATASTROPHE_IDS.map((id) => card(id, !d.random && d.catastrophe === id, bestFor(history, id))).join('')}${card('random', d.random)}</div>
     ${detail}
-    <div class="opts"><label>Difficulty</label>${seg('difficulty', d.difficulty, [['easy', 'Forgiving'], ['normal', 'Standard'], ['hard', 'Brutal']])}</div>
-    <p class="muted small">${esc(difficultyInfo(d.difficulty).blurb)}</p>
+    <div class="opts"><label>Difficulty</label>${difficultySeg(d, unlocked)}</div>
+    <p class="muted small">${esc(difficultyInfo(d.difficulty).blurb)}${unlocked ? '' : ' Brutal unlocks once you bring a settlement through on Standard with a Functioning grade or better.'}</p>
+    ${history.length ? `<p class="muted small">${history.length} run${history.length > 1 ? 's' : ''} played · ${history.filter((r) => r.status === 'won').length} survived</p>` : ''}
     ${warn}
     <button class="go big" data-a="begin">${d.random ? 'Begin — random catastrophe' : `Begin — ${esc(sel!.name)}`}</button>
     <button class="lnk sandbox-link" data-a="draft" data-v="view|custom">${icon('sliders')}Custom sandbox</button>`;

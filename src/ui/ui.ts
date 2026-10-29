@@ -14,11 +14,16 @@ import type { ViewState } from '../render/renderer';
 import type { SpeedIndex } from '../sim/time';
 import { icon } from './icons';
 import { defaultDraft, draftOptions, hazardPill, scenarioSelectHtml, SCENARIO_ICON, worldPanelHtml, type NewGameDraft } from './scenarioUi';
-import { isActive, locationHazard, radiationNow, type NewGameOptions } from '../sim/catastrophes';
+import { CATASTROPHES, difficultyInfo, isActive, locationHazard, radiationNow, type NewGameOptions } from '../sim/catastrophes';
 import { portrait } from './portraits';
+import { Coach } from './coach';
+import { bestFor, brutalUnlocked, shortGrade, type RunRecord } from './history';
+import { bond, bondLabel } from '../sim/social';
+import { objectiveTarget } from '../sim/scenario';
+import type { Cue } from '../audio/audio';
 
 export type PanelKind = 'object' | 'survivor' | 'build' | 'jobs' | 'log' | 'stores' | 'world' | null;
-export type ModalKind = 'expedition' | 'menu' | 'objectives' | 'help' | 'end' | 'confirmNew' | 'scenario' | null;
+export type ModalKind = 'expedition' | 'menu' | 'objectives' | 'help' | 'end' | 'confirmNew' | 'scenario' | 'recap' | null;
 
 export interface Controller {
   state: GameState;
@@ -41,7 +46,32 @@ export interface Controller {
   centerOnObject(id: string): void;
   newGame(opts?: Partial<NewGameOptions>): void;
   saveStatus: string;
+  muted: boolean;
+  toggleMute(): void;
+  cue(c: Cue): void;
+  history: RunRecord[];
+  continueEndless(): void;
+  settle(): void;
+  pref(key: string): string | null;
+  setPref(key: string, value: string | null): void;
 }
+
+/** What each top-bar number means, where it comes from and where it goes. */
+const RES_INFO: Record<string, { name: string; text: string }> = {
+  food: { name: 'Food rations', text: 'Everyone eats about one a day. Grow more in planters, or scavenge at the market.' },
+  water: { name: 'Safe water', text: 'Each person drinks about 3.6 L a day. Filters, the purifier or boiling turn untreated water into this.' },
+  rawWater: { name: 'Untreated water', text: 'From the well, a bucket or the rain. Drinking it can make people sick, so treat it first.' },
+  fuel: { name: 'Diesel', text: 'Runs the generator. Siphon wrecks, drain drums, or search the garage.' },
+  power: { name: 'Power', text: 'Demand / supply in kW. The generator (later a turbine or battery bank) runs the pump, purifier, lamps, workbench and radio.' },
+  scrap: { name: 'Scrap', text: 'The basic material for building and repairs. Salvage heaps and dismantle junk for more.' },
+  mech: { name: 'Mechanical parts', text: 'Bearings, gears and belts. Engines, pumps and gates need them.' },
+  elec: { name: 'Electrical parts', text: 'Wire, relays and fuses. Wiring, the radio and the battery bank need them.' },
+  battery: { name: 'Battery cells', text: 'Re-cell the battery bank so spare power is stored instead of wasted.' },
+  tools: { name: 'Tool kits', text: 'Most jobs need a free kit, returned when the job is done. More kits means more jobs at once.' },
+  meds: { name: 'Medical supplies', text: 'Treat injuries, illness, bites and radiation. The medic uses them best.' },
+  engine: { name: 'Salvaged engine', text: 'Fit it to the generator for a more fuel-efficient engine.' },
+  filter: { name: 'Filter cartridges', text: 'Fit one to a sand filter to double its output.' },
+};
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const fmt = (v: number, d = 0) => (Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : v.toFixed(d || 1));
@@ -168,22 +198,30 @@ export class UI {
   private endShown = false;
   draft: NewGameDraft = defaultDraft();
   private sheet: HTMLDivElement | null = null;
+  coach = new Coach();
+  resOpen: string | null = null;
+  private peek = false;
+  private panelKey = '';
+  private samples: { m: number; inv: Items }[] = [];
+  private drag: { y0: number; dy: number } | null = null;
 
   constructor(private root: HTMLElement, private c: Controller) {
     root.insertAdjacentHTML(
       'beforeend',
       `<div id="hud"><header id="top"><div id="clock"></div><div id="speed"></div><div id="res"></div></header>
+       <div id="respop" class="hidden"></div>
        <div id="objective"></div>
        <div id="alerts"></div></div>
-       <div id="bottom"><aside id="panel" class="hidden"></aside>
+       <div id="bottom"><div id="coach" class="hidden"></div><aside id="panel" class="hidden"></aside>
        <nav id="dock"></nav>
        <footer id="roster"></footer></div>
        <div id="toasts"></div>
        <div id="modal" class="hidden"></div>`,
     );
-    for (const id of ['top', 'clock', 'res', 'speed', 'objective', 'alerts', 'panel', 'dock', 'roster', 'toasts', 'modal']) this.els[id] = document.getElementById(id)!;
+    for (const id of ['top', 'clock', 'res', 'speed', 'respop', 'objective', 'alerts', 'coach', 'panel', 'dock', 'roster', 'toasts', 'modal']) this.els[id] = document.getElementById(id)!;
+    this.bindSheetDrag();
     root.addEventListener('pointerdown', (e) => {
-      if ((e.target as HTMLElement).closest('#top,#panel,#dock,#roster,#modal,#objective,#alerts')) this.pointerDown = true;
+      if ((e.target as HTMLElement).closest('#top,#panel,#dock,#roster,#modal,#objective,#alerts,#respop,#coach')) this.pointerDown = true;
     });
     const up = () => (this.pointerDown = false);
     window.addEventListener('pointerup', up);
@@ -199,10 +237,58 @@ export class UI {
     el.className = `toast ${ok ? '' : 'bad'}`;
     el.textContent = msg;
     t.appendChild(el);
+    this.placeToasts();
     while (t.children.length > 3) t.firstChild!.remove();
     window.clearTimeout(this.toastTimer);
     setTimeout(() => el.classList.add('out'), 2600);
     setTimeout(() => el.remove(), 3200);
+  }
+
+  /** On phones, keep messages just above an open bottom panel instead of over the HUD. */
+  private placeToasts(): void {
+    const t = this.els.toasts;
+    const stack = [this.els.coach, this.els.panel].filter((el) => !el.classList.contains('hidden'));
+    if (window.innerWidth < 760 && stack.length) {
+      const top = Math.min(...stack.map((el) => el.getBoundingClientRect().top));
+      t.style.top = 'auto';
+      t.style.bottom = `${Math.round(window.innerHeight - top + 8)}px`;
+    } else {
+      t.style.top = '';
+      t.style.bottom = '';
+    }
+  }
+
+  /** Drag the phone panel by its handle: down to shrink to a peek (or close), up to expand. */
+  private bindSheetDrag(): void {
+    const panel = this.els.panel;
+    panel.addEventListener('pointerdown', (e) => {
+      if (!(e.target as HTMLElement).closest('.grab')) return;
+      this.drag = { y0: e.clientY, dy: 0 };
+      panel.setPointerCapture(e.pointerId);
+      panel.style.transition = 'none';
+    });
+    panel.addEventListener('pointermove', (e) => {
+      if (!this.drag) return;
+      this.drag.dy = e.clientY - this.drag.y0;
+      panel.style.transform = `translateY(${Math.max(-20, this.drag.dy)}px)`;
+    });
+    const end = () => {
+      if (!this.drag) return;
+      const dy = this.drag.dy;
+      this.drag = null;
+      panel.style.transition = '';
+      panel.style.transform = '';
+      if (Math.abs(dy) < 6) this.peek = !this.peek;
+      else if (dy > 50) {
+        if (this.peek) {
+          this.c.openPanel(null);
+          this.c.cue('close');
+        } else this.peek = true;
+      } else if (dy < -30) this.peek = false;
+      this.update(true);
+    };
+    panel.addEventListener('pointerup', end);
+    panel.addEventListener('pointercancel', end);
   }
 
   private set(id: string, html: string): void {
@@ -225,13 +311,26 @@ export class UI {
     this.set('alerts', this.alertsHtml(s));
     this.set('dock', this.dockHtml(s));
     this.set('roster', this.rosterHtml(s));
+    this.sample(s);
+    this.c.view.beacon = this.c.placing ? null : objectiveTarget(s);
+    const resPop = this.resPopHtml(s);
+    this.show('respop', !!resPop);
+    if (resPop) this.set('respop', resPop);
+    const key = `${this.c.panel}|${this.c.view.selectedObject}|${this.c.view.selectedSurvivor}|${this.c.placing}`;
+    if (key !== this.panelKey) {
+      this.panelKey = key;
+      this.peek = false;
+    }
     const panel = this.panelHtml(s);
     this.show('panel', !!panel);
     this.root.classList.toggle('panel-open', !!panel);
-    if (panel) this.set('panel', panel);
+    this.root.classList.toggle('panel-peek', !!panel && this.peek);
+    if (panel) this.set('panel', `<div class="grab" aria-label="Drag to resize"><span></span></div>${panel}`);
+    this.updateCoach(s);
+    if (this.els.toasts.childElementCount) this.placeToasts();
     // Modals: a pending event always takes precedence.
     let modal = '';
-    if (this.c.modal === 'scenario') modal = scenarioSelectHtml(s, this.draft);
+    if (this.c.modal === 'scenario') modal = scenarioSelectHtml(s, this.draft, this.c.history);
     else if (s.events.pending) modal = this.eventHtml(s);
     else if (s.result && !this.endShown) {
       this.endShown = true;
@@ -245,6 +344,7 @@ export class UI {
         case 'help': modal = this.helpHtml(); break;
         case 'end': modal = this.endHtml(s); break;
         case 'confirmNew': modal = this.confirmNewHtml(); break;
+        case 'recap': modal = this.recapHtml(s); break;
       }
     }
     this.show('modal', !!modal);
@@ -271,6 +371,70 @@ export class UI {
 
   resetEnd(): void {
     this.endShown = false;
+    this.samples = [];
+  }
+
+  // ---------------------------------------------------------------- coach & resource help
+
+  private updateCoach(s: GameState): void {
+    const v = { state: s, speed: this.c.speed, panel: this.c.panel, selectedObject: this.c.view.selectedObject, resOpen: this.resOpen };
+    if (this.coach.tick(v)) this.c.cue('good');
+    const panelOpen = !this.els.panel.classList.contains('hidden') && window.innerWidth < 760;
+    const show = this.coach.active && !this.c.modal && !s.events.pending && !this.coach.yields(panelOpen);
+    this.show('coach', show);
+    this.root.classList.toggle('coach-on', show);
+    this.set('coach', show ? this.coach.html(v) : '');
+    const glow = show ? this.coach.glow() : undefined;
+    for (const el of this.root.querySelectorAll('.coach-glow')) if (!glow || !el.matches(glow)) el.classList.remove('coach-glow');
+    if (glow) for (const el of this.root.querySelectorAll(glow)) el.classList.add('coach-glow');
+  }
+
+  startCoach(): void {
+    const s = this.c.state;
+    this.coach.start({ state: s, speed: this.c.speed, panel: this.c.panel, selectedObject: this.c.view.selectedObject, resOpen: this.resOpen });
+  }
+
+  /** Keep a few hours of stock levels so the help card can say how fast things are changing. */
+  private sample(s: GameState): void {
+    const last = this.samples[this.samples.length - 1];
+    if (last && s.minute < last.m) this.samples = [];
+    if (!last || s.minute - last.m >= 30) {
+      this.samples.push({ m: s.minute, inv: { ...s.inventory } });
+      if (this.samples.length > 7) this.samples.shift();
+    }
+  }
+
+  private rate(s: GameState, id: ItemId): number | null {
+    const old = this.samples.find((x) => s.minute - x.m >= 60);
+    if (!old) return null;
+    return ((count(s, id) - (old.inv[id] ?? 0)) / (s.minute - old.m)) * 60;
+  }
+
+  private resPopHtml(s: GameState): string {
+    const id = this.resOpen;
+    if (!id) return '';
+    const info = RES_INFO[id];
+    if (!info) return '';
+    const alive = presentSurvivors(s).length || 1;
+    const lines: string[] = [];
+    let amount = '';
+    if (id === 'power') {
+      const p = s.power;
+      amount = p.supply > 0 || p.stored > 0 ? `${fmt(p.demand, 1)} kW used of ${fmt(p.supply, 1)} kW` : 'No power';
+      if (p.capacity) lines.push(`Battery ${Math.round((p.stored / p.capacity) * 100)}% charged`);
+      if (p.deficit) lines.push('<span class="tone-bad">Short: some equipment has shut off</span>');
+    } else {
+      const k = id as ItemId;
+      amount = `${fmt(count(s, k), 1)}${ITEMS[k].unit ? ` ${ITEMS[k].unit}` : ''}`;
+      const r = this.rate(s, k);
+      if (r !== null && Math.abs(r) >= 0.05) lines.push(`<span class="tone-${r > 0 ? 'good' : 'warn'}">${r > 0 ? '+' : '−'}${fmt(Math.abs(r), 1)} per hour</span>`);
+      else if (r !== null) lines.push('Steady');
+      if (k === 'food') lines.push(`Lasts ~${fmt(count(s, 'food') / alive, 1)} days for ${alive}`);
+      if (k === 'water') lines.push(`Lasts ~${fmt(count(s, 'water') / (alive * 3.6), 1)} days for ${alive}`);
+    }
+    return `<div class="rp-card"><div class="rp-h">${icon(id === 'power' ? 'power' : id)}<b>${info.name}</b><span class="rp-amt">${amount}</span><button class="x" data-a="res-close" aria-label="Close">${icon('close')}</button></div>
+      ${lines.length ? `<p class="rp-line">${lines.join(' · ')}</p>` : ''}<p>${info.text}</p>
+      <button class="lnk" data-a="res-stores">${icon('stores')}All stores &amp; systems</button></div>`;
   }
 
   // ---------------------------------------------------------------- top bar
@@ -298,33 +462,36 @@ export class UI {
         ? `<span class="storm ${left < 24 * 60 ? 'soon' : ''}">${icon('storm')}${formatDuration(left)}</span>`
         : `<span class="storm vague" title="Repair the radio for an exact forecast">${icon('storm')}${s.minute > 32 * 60 ? `~Day ${dayOf(wx.stormStart) - (s.seed % 2)}–${dayOf(wx.stormStart) + 1}` : 'coming'}</span>`;
     }
-    return `<div class="day"><b>Day ${Math.min(7, dayOf(s.minute))}</b><span class="of">/7</span><span class="time">${clockString(s.minute)}</span></div>
+    const endless = !!s.flags.endless;
+    return `<div class="day"><b>Day ${endless ? dayOf(s.minute) : Math.min(7, dayOf(s.minute))}</b><span class="of">${endless ? '∞' : '/7'}</span><span class="time">${clockString(s.minute)}</span></div>
       <div class="wx">${icon(wxIcon)}<span>${wxText}</span>${storm}</div>`;
   }
 
   private resHtml(s: GameState): string {
-    const lowFood = count(s, 'food') < 4;
-    const lowWater = count(s, 'water') < 10;
+    const alive = presentSurvivors(s).length;
+    const lowFood = count(s, 'food') < Math.max(4, alive);
+    const lowWater = count(s, 'water') < Math.max(10, alive * 3);
     const p = s.power;
     const gen = s.objects.find((o) => o.type === 'generator');
     const running = !!gen?.data.running;
     const powerTxt = p.supply > 0 || p.stored > 0 ? `${fmt(p.demand, 1)}/${fmt(p.supply + (p.stored > 0 ? 6 : 0), 1)}` : 'off';
+    const btn = (id: string, html: string) => html.replace('<span class="chip', `<button data-a="res" data-v="${id}" aria-label="${RES_INFO[id].name}" class="chip${this.resOpen === id ? ' open' : ''}`).replace(/<\/span>$/, '</button>');
     const rows = [
-      chip('food', count(s, 'food'), lowFood ? 'low' : ''),
-      chip('water', count(s, 'water'), lowWater ? 'low' : ''),
-      chip('rawWater', count(s, 'rawWater')),
-      chip('fuel', count(s, 'fuel'), count(s, 'fuel') < 2 ? 'low' : ''),
-      `<span class="chip power ${p.deficit ? 'low' : running || p.supply > 0 ? 'on' : ''}" title="Power demand / supply (kW)">${icon('power')}<b>${powerTxt}</b>${p.capacity ? `<i>${Math.round((p.stored / p.capacity) * 100)}%</i>` : ''}</span>`,
-      chip('scrap', count(s, 'scrap')),
-      chip('mech', count(s, 'mech')),
-      chip('elec', count(s, 'elec')),
-      chip('battery', count(s, 'battery')),
-      chip('tools', count(s, 'tools'), count(s, 'tools') < 1 ? 'low' : ''),
-      chip('meds', count(s, 'meds')),
+      btn('food', chip('food', count(s, 'food'), lowFood ? 'low' : '')),
+      btn('water', chip('water', count(s, 'water'), lowWater ? 'low' : '')),
+      btn('rawWater', chip('rawWater', count(s, 'rawWater'))),
+      btn('fuel', chip('fuel', count(s, 'fuel'), count(s, 'fuel') < 2 ? 'low' : '')),
+      btn('power', `<span class="chip power ${p.deficit ? 'low' : running || p.supply > 0 ? 'on' : ''}">${icon('power')}<b>${powerTxt}</b>${p.capacity ? `<i>${Math.round((p.stored / p.capacity) * 100)}%</i>` : ''}</span>`),
+      btn('scrap', chip('scrap', count(s, 'scrap'))),
+      btn('mech', chip('mech', count(s, 'mech'))),
+      btn('elec', chip('elec', count(s, 'elec'))),
+      btn('battery', chip('battery', count(s, 'battery'))),
+      btn('tools', chip('tools', count(s, 'tools'), count(s, 'tools') < 1 ? 'low' : '')),
+      btn('meds', chip('meds', count(s, 'meds'))),
     ];
-    if (count(s, 'engine')) rows.push(chip('engine', count(s, 'engine'), 'special'));
-    if (count(s, 'filter')) rows.push(chip('filter', count(s, 'filter'), 'special'));
-    return `<button class="res-btn" data-a="panel" data-v="stores" aria-label="Stores and systems">${rows.join('')}</button>`;
+    if (count(s, 'engine')) rows.push(btn('engine', chip('engine', count(s, 'engine'), 'special')));
+    if (count(s, 'filter')) rows.push(btn('filter', chip('filter', count(s, 'filter'), 'special')));
+    return `<div class="res-btn">${rows.join('')}</div>`;
   }
 
   private speedHtml(): string {
@@ -335,7 +502,8 @@ export class UI {
   private objectiveHtml(s: GameState): string {
     const objs = objectives(s).filter((o) => !o.optional);
     const done = objs.filter((o) => o.done).length;
-    return `<button data-a="modal" data-v="objectives">${icon('target')}<span class="obj-text">${esc(immediateObjective(s))}</span><span class="obj-count">${done}/${objs.length}</span></button>`;
+    const target = objectiveTarget(s);
+    return `<div class="obj-pill"><button class="obj-go" data-a="obj-go" ${target ? '' : 'data-none="1"'} aria-label="Go to the current objective">${icon('target')}<span class="obj-text">${esc(immediateObjective(s))}</span></button><button class="obj-count" data-a="modal" data-v="objectives" aria-label="All objectives">${done}/${objs.length}</button></div>`;
   }
 
   private alertsHtml(s: GameState): string {
@@ -573,12 +741,16 @@ export class UI {
         return `<div><span>${SKILL_LABEL[k]}</span><span class="pips">${[1, 2, 3].map((i) => `<i class="${v >= i ? 'on' : ''}"></i>`).join('')}</span></div>`;
       })
       .join('')}</div>`;
-    const rel = Object.entries(x.relationships)
-      .map(([id, v]) => ({ s: getSurvivor(s, id), v }))
-      .filter((r) => r.s && r.s.alive)
-      .sort((a, b) => b.v - a.v)
-      .slice(0, 2);
-    if (rel.length) html += `<p class="muted small">Closest to ${rel.map((r) => esc(first(r.s!))).join(' and ')}.</p>`;
+    const rel = s.survivors
+      .filter((o) => o !== x && o.alive)
+      .map((o) => ({ o, v: bond(x, o), label: bondLabel(bond(x, o)) }))
+      .filter((r) => r.label)
+      .sort((a, b) => b.v - a.v);
+    html += `<h4>Relationships</h4>`;
+    html += rel.length
+      ? `<div class="rels">${rel.map((r) => `<span class="rel ${r.v < 0 ? 'rival' : r.v >= 70 ? 'close' : ''}"><img src="${portrait(r.o)}" alt="">${esc(first(r.o))}<small>${r.label}</small></span>`).join('')}</div>
+        <p class="muted small">Friends lift each other’s morale and work faster side by side; rivals drag each other down. Time together in good conditions builds bonds.</p>`
+      : `<p class="muted small">No strong ties yet. Time together in good conditions builds friendships.</p>`;
     return html;
   }
 
@@ -803,6 +975,9 @@ export class UI {
         <button class="go" data-a="modal-close">Resume</button>
         <button class="ghost" data-a="modal" data-v="objectives">${icon('target')}Objectives</button>
         <button class="ghost" data-a="modal" data-v="help">${icon('log')}How to play</button>
+        <button class="ghost" data-a="tutorial">${icon('target')}Replay the tutorial</button>
+        <button class="ghost ${this.c.muted ? '' : 'on'}" data-a="mute">${icon(this.c.muted ? 'close' : 'check')}Sound ${this.c.muted ? 'off' : 'on'} <small>(M)</small></button>
+        ${this.c.state.flags.endless && !this.c.state.result ? `<button class="ghost" data-a="settle">${icon('check')}Settle here — end the run</button>` : ''}
         <button class="ghost danger" data-a="modal" data-v="scenario">Start a new game</button>
       </div>`;
   }
@@ -837,7 +1012,35 @@ export class UI {
       <ul class="objs">${r.objectives.map((o) => `<li class="${o.done ? 'done' : ''}">${icon(o.done ? 'check' : 'close')}<div><b>${esc(o.label)}</b></div></li>`).join('')}</ul>
       <ul class="summary">${r.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
       ${s.stats.choices.length ? `<h4>Key choices</h4><ul class="summary">${s.stats.choices.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}
-      <div class="row"><button class="go" data-a="newgame">Play again</button><button class="ghost" data-a="modal-close">Look around</button></div></div>`;
+      ${this.recordLine(s)}
+      ${r.status === 'won' && !s.flags.endless ? `<button class="go big endless" data-a="endless">${icon('ff')}Keep going — endless mode<small>Every day after this is harder. How long can they last?</small></button>` : ''}
+      <div class="row"><button class="${r.status === 'won' && !s.flags.endless ? 'ghost' : 'go'}" data-a="modal" data-v="scenario">Play again</button><button class="ghost" data-a="modal-close">Look around</button></div></div>`;
+  }
+
+  private recordLine(s: GameState): string {
+    const h = this.c.history;
+    const best = bestFor(h, s.world.catastrophe);
+    const runs = h.filter((r) => r.catastrophe === s.world.catastrophe && !r.sandbox).length;
+    let out = best ? `<p class="muted small">${runs} ${esc(CATASTROPHES[s.world.catastrophe].name)} run${runs > 1 ? 's' : ''} · best: ${esc(shortGrade(best.grade))}${best.endless ? `, ${best.days} days` : ''}</p>` : '';
+    if (brutalUnlocked(h) && !h.slice(0, -1).some((r) => !r.sandbox && r.difficulty !== 'easy' && ['Functioning settlement', 'Thriving settlement'].includes(r.grade)) && s.world.difficulty !== 'easy')
+      out += `<p class="tone-good small">${icon('check')}Brutal difficulty unlocked.</p>`;
+    return out;
+  }
+
+  private recapHtml(s: GameState): string {
+    const alive = presentSurvivors(s).length;
+    const total = s.survivors.filter((x) => x.alive).length;
+    const objs = objectives(s).filter((o) => !o.optional);
+    const recent = s.log.filter((e) => e.tone !== 'info').slice(-4).reverse();
+    const days = (n: number) => (n >= 10 ? '10+' : fmt(n, 1));
+    return `<div class="ph"><div><p class="kicker">Welcome back</p><h2>Day ${dayOf(s.minute)}, ${clockString(s.minute)}</h2><p class="sub">${esc(CATASTROPHES[s.world.catastrophe].name)} · ${esc(difficultyInfo(s.world.difficulty).label)}${s.flags.endless ? ' · endless' : ''}</p></div></div>
+      <dl class="stats"><dt>People</dt><dd>${alive} at the compound${total > alive ? `, ${total - alive} away` : ''}${s.stats.deaths.length ? ` · ${s.stats.deaths.length} lost` : ''}</dd>
+      <dt>Food</dt><dd>${fmt(count(s, 'food'), 1)} rations · ~${days(count(s, 'food') / Math.max(1, total))} days</dd>
+      <dt>Water</dt><dd>${fmt(count(s, 'water'))} L safe · ~${days(count(s, 'water') / Math.max(1, total * 3.6))} days</dd>
+      <dt>Objectives</dt><dd>${objs.filter((o) => o.done).length} of ${objs.length} done</dd></dl>
+      <p class="recap-next">${icon('target')}<span>${esc(immediateObjective(s))}</span></p>
+      ${recent.length ? `<h4>Recently</h4><ol class="log">${recent.map((e) => `<li class="tone-${e.tone}"><time>D${dayOf(e.t)} ${clockString(e.t)}</time>${esc(e.text)}</li>`).join('')}</ol>` : ''}
+      <button class="go big" data-a="modal-close">Carry on</button>`;
   }
 
   // ---------------------------------------------------------------- events
@@ -866,9 +1069,32 @@ export class UI {
     const run = (cmd: Command) => {
       const r = c.command(cmd);
       this.toast(r.message, r.ok);
+      if (!r.ok) c.cue('error');
+      else if (cmd.type === 'queueAction' || cmd.type === 'treat' || cmd.type === 'expedition') c.cue('queue');
       return r;
     };
+    if (!['queue', 'res', 'coach-end'].includes(a)) c.cue(a === 'close-panel' || a === 'modal-close' || a === 'res-close' ? 'close' : 'tap');
     switch (a) {
+      case 'res': this.resOpen = this.resOpen === v ? null : v; c.cue('open'); break;
+      case 'res-close': this.resOpen = null; break;
+      case 'res-stores': this.resOpen = null; c.openPanel('stores'); break;
+      case 'obj-go': {
+        const t = objectiveTarget(s);
+        if (!t) c.openModal('objectives');
+        else if (t.kind === 'object') {
+          c.selectObject(t.id);
+          c.centerOnObject(t.id);
+        } else {
+          c.selectSurvivor(t.id);
+          c.centerOnSurvivor(t.id);
+        }
+        break;
+      }
+      case 'coach-end': this.coach.stop(); c.setPref('colony.coach', 'done'); c.cue('complete'); break;
+      case 'tutorial': c.openModal(null); this.startCoach(); break;
+      case 'mute': c.toggleMute(); break;
+      case 'endless': c.continueEndless(); break;
+      case 'settle': c.openModal(null); c.settle(); break;
       case 'speed': c.setSpeed(Number(v) as SpeedIndex); break;
       case 'modal': c.openModal(v as ModalKind); break;
       case 'modal-close': c.openModal(null); break;
@@ -952,7 +1178,9 @@ export class UI {
           d.extra = d.extra.filter((x) => x !== val);
         } else if (k === 'extra') d.extra = d.extra.includes(val as CatastropheId) ? d.extra.filter((x) => x !== val) : [...d.extra, val as CatastropheId];
         else if (k === 'view') d.view = val as NewGameDraft['view'];
-        else if (k === 'difficulty') d.difficulty = val as NewGameDraft['difficulty'];
+        else if (k === 'difficulty') {
+          if (val !== 'hard' || brutalUnlocked(c.history) || d.view === 'custom') d.difficulty = val as NewGameDraft['difficulty'];
+        }
         else if (k === 'supplies') d.supplies = val as NewGameDraft['supplies'];
         else if (k === 'director') d.director = val as NewGameDraft['director'];
         break;

@@ -65,8 +65,18 @@ async function run(name, opts) {
   // Select Ines from the roster; tap the ground to move her.
   await tapSel('[data-a="sel-surv"][data-v="s-amara"]');
   check(/Amara/.test(await page.locator('#panel h2').first().textContent()), `${name}: survivor panel opens`);
-  await ev(() => window.__colony.focus(16.5, 15.5));
-  const gp = await ev(() => window.__colony.screenOf(16.5, 15.5));
+  // Heaps move between games, so find a yard tile where a tap really lands on open ground.
+  const gp = await ev(() => {
+    const g = window.__colony;
+    for (let y = 13; y < 21; y++)
+      for (let x = 14; x < 22; x++) {
+        g.focus(x + 0.5, y + 0.5);
+        const p = g.screenOf(x + 0.5, y + 0.5);
+        const hit = g.renderer.pick(g.state, p.x, p.y);
+        if (hit.kind !== 'survivor' && hit.kind !== 'object') return p;
+      }
+    return g.screenOf(16.5, 15.5);
+  });
   await tap(gp.x, gp.y);
   check(await ev(() => !!window.__colony.state.survivors.find((s) => s.id === 's-amara').moveTarget), `${name}: tap-to-move order given`);
 
