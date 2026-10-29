@@ -9,10 +9,11 @@ import { createGame } from './setup';
 import { applyScenario, CATASTROPHE_IDS, isActive, setPlacementCheck, tickWorld, type NewGameOptions } from './catastrophes';
 import { tickDirector } from './director';
 import { runSandbox } from './sandbox';
+import { tickSocial } from './social';
 import { hashNoise } from './rng';
 import { aliveSurvivors, endQuarantine, spreadIllness, tickSurvivor } from './survivors';
-import { END_MINUTE } from './time';
-import { accessTiles, GATE_INSIDE, GATE_TILES, inCompound, occupancy, reachable, MAP_W, walkable } from './world';
+import { END_MINUTE, dayOf } from './time';
+import { accessTiles, GATE_INSIDE, GATE_TILES, inCompound, isSheltered, occupancy, reachable, MAP_W, walkable, ZONES } from './world';
 import type { Command, CommandResult, GameState, ObjectType, WorldObject } from './types';
 
 export function newGame(seed = Date.now() % 100000, opts?: Partial<NewGameOptions>): GameState {
@@ -23,8 +24,74 @@ export function newGame(seed = Date.now() % 100000, opts?: Partial<NewGameOption
     o.catastrophe = CATASTROPHE_IDS[Math.floor(hashNoise(seed, 97) * CATASTROPHE_IDS.length)];
   }
   applyScenario(s, o);
+  shuffleLayout(s);
   runEvents(s);
   return s;
+}
+
+/** Loose heaps and wrecks that move between games; machines and buildings stay put. */
+const LOOSE: ObjectType[] = ['scrapPile', 'wreckedCar'];
+
+/**
+ * Each new game scatters the salvage differently and shuffles what each heap holds, so no two
+ * runs open the same way. Uses its own hash stream so the game's RNG sequence is untouched.
+ */
+export function shuffleLayout(state: GameState): void {
+  let n = 0;
+  const rnd = () => hashNoise(state.seed, 7000 + n++);
+  const loose = state.objects.filter((o) => LOOSE.includes(o.type) && o.state !== 'dismantled');
+  const contents = loose.filter((o) => o.type === 'scrapPile').map((o) => o.contents);
+  for (let i = contents.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [contents[i], contents[j]] = [contents[j], contents[i]];
+  }
+  loose.filter((o) => o.type === 'scrapPile').forEach((o, i) => (o.contents = contents[i]));
+  for (const o of loose) {
+    const home = { x: o.x, y: o.y };
+    state.objects.splice(state.objects.indexOf(o), 1);
+    let placed = false;
+    for (let tries = 0; tries < 60 && !placed; tries++) {
+      const x = 3 + Math.floor(rnd() * (MAP_W - 6 - o.w));
+      const y = 3 + Math.floor(rnd() * 25);
+      if (isSheltered(x, y) || isSheltered(x + o.w - 1, y) || inZone(x, y, o.w, o.h)) continue;
+      if (footprintBlocked(state, o.w, o.h, x, y)) continue;
+      o.x = x;
+      o.y = y;
+      placed = true;
+    }
+    if (!placed) Object.assign(o, home);
+    state.objects.push(o);
+  }
+}
+
+function inZone(x: number, y: number, w: number, h: number): boolean {
+  return ZONES.some((z) => x + w - 1 >= z.x0 - 1 && x <= z.x1 + 1 && y + h - 1 >= z.y0 - 1 && y <= z.y1 + 1);
+}
+
+/** After Day 7: keep the settlement going with harder seasons until everyone is gone or the player settles. */
+export function continueEndless(state: GameState): CommandResult {
+  if (!state.result || state.result.status !== 'won' || state.flags.endless) return { ok: false, message: 'Only a surviving settlement can keep going.' };
+  state.flags.endless = true;
+  state.flags.endlessGrade = state.result.grade;
+  state.result = null;
+  // The weather keeps turning: a rain spell every two to three days.
+  let t = state.minute + 20 * 60;
+  for (let k = 0; k < 40; k++) {
+    const len = (4 + Math.floor(hashNoise(state.seed, 900 + k) * 5)) * 60;
+    state.weather.rainWindows.push({ start: t, end: t + len, heavy: hashNoise(state.seed, 950 + k) < 0.25 ? 1 : undefined });
+    t += (44 + Math.floor(hashNoise(state.seed, 980 + k) * 30)) * 60;
+  }
+  log(state, 'The week is over, but the world hasn’t ended. Every day from here is harder.', 'warn');
+  return { ok: true, message: 'The settlement endures.' };
+}
+
+/** End an endless run on the player's terms. */
+export function settleDown(state: GameState): CommandResult {
+  if (!state.flags.endless || state.result) return { ok: false, message: 'Nothing to settle.' };
+  updateObjectives(state);
+  state.result = evaluateEnd(state);
+  log(state, `The settlement stands after ${dayOf(state.minute)} days.`, 'good');
+  return { ok: true, message: '' };
 }
 
 export function isPaused(state: GameState): boolean {
@@ -47,11 +114,12 @@ export function step(state: GameState): void {
   tickExpeditions(state);
   runEvents(state);
   if (!state.events.pending) tickDirector(state);
+  if (state.minute % 60 === 0) tickSocial(state);
   if (state.minute % 10 === 0) updateObjectives(state);
   if (aliveSurvivors(state).length === 0) {
     state.result = evaluateEnd(state, true);
     log(state, 'The settlement is lost.', 'bad');
-  } else if (state.minute >= END_MINUTE && !state.events.pending) {
+  } else if (state.minute >= END_MINUTE && !state.events.pending && !state.flags.endless) {
     updateObjectives(state);
     state.result = evaluateEnd(state);
     log(state, `Seven days survived: ${state.result.grade}.`, state.result.status === 'won' ? 'good' : 'bad');

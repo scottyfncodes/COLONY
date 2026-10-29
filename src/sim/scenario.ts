@@ -193,6 +193,8 @@ export function evaluateEnd(s: GameState, early = false): ScenarioResult {
   if (working.length) lines.push(`Working infrastructure: ${working.map((o) => OBJECT_DEFS[o.type].name).join(', ')}.`);
   if (s.stats.stormDamage.length) lines.push(`Storm damage: ${s.stats.stormDamage.join('; ')}.`);
 
+  const endless = !!s.flags.endless;
+  if (endless) lines.unshift(`Endured ${dayOf(s.minute) - 1} days — the first week graded ${String(s.flags.endlessGrade ?? '?').toLowerCase()}.`);
   let status: ScenarioResult['status'] = 'won';
   let grade = '';
   let headline = '';
@@ -200,6 +202,7 @@ export function evaluateEnd(s: GameState, early = false): ScenarioResult {
     status = 'lost';
     grade = 'Settlement lost';
     headline = alive === 0 ? 'Nobody is left at the compound.' : 'Too few remain to keep the compound alive.';
+    if (endless) headline = `Held out for ${dayOf(s.minute) - 1} days before the end.`;
   } else if (systems < 2) {
     status = 'lost';
     grade = 'Abandoned';

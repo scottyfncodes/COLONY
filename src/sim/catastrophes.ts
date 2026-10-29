@@ -5,7 +5,7 @@ import { getSurvivor } from './jobs';
 import { chance, randInt } from './rng';
 import { NEVER, obj } from './setup';
 import { presentSurvivors } from './survivors';
-import { dayOf, isNight, MINUTES_PER_DAY } from './time';
+import { dayOf, isNight, MINUTES_PER_DAY, SCENARIO_DAYS } from './time';
 import { isSheltered } from './world';
 import type { EventDef } from './events';
 import type { CatastropheId, ClimaxKind, Difficulty, GameMode, GameState, ItemId, LocationId, Survivor, WorldObject } from './types';
@@ -88,7 +88,18 @@ export function mods(s: GameState): Mods {
   const diff = DIFFICULTY[s.world.difficulty] ?? DIFFICULTY.normal;
   m.needs *= diff.needs;
   m.adverse *= diff.adverse;
+  const strain = endlessStrain(s);
+  if (strain) {
+    m.needs *= 1 + 0.04 * strain;
+    m.adverse *= 1 + 0.15 * strain;
+    m.loot *= Math.max(0.4, 1 - 0.06 * strain);
+  }
   return m;
+}
+
+/** Days past the first week in an endless run; pressure grows with each one. */
+export function endlessStrain(s: GameState): number {
+  return s.flags.endless ? Math.max(0, (s.minute - SCENARIO_DAYS * MINUTES_PER_DAY) / MINUTES_PER_DAY) : 0;
 }
 
 // ---------------------------------------------------------------- shared world helpers

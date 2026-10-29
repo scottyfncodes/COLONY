@@ -5,6 +5,7 @@ import { chance } from './rng';
 import { isSheltered, occupancy, accessTiles, nearestWalkable } from './world';
 import { isNight } from './time';
 import type { CommandResult, GameState, Items, Job, Survivor, WorldObject } from './types';
+import { socialWork } from './social';
 
 export function newId(state: GameState, prefix: string): string {
   return `${prefix}-${state.nextId++}`;
@@ -243,6 +244,7 @@ export function workRate(state: GameState, s: Survivor, job: Job): number {
   if (s.injury > 40) r *= 0.7;
   if (s.sick > 0) r *= 0.75;
   if (s.energy < 25) r *= 0.75;
+  r *= socialWork(state, s);
   if (s.morale < 25) r *= 0.85;
   else if (s.morale > 75) r *= 1.1;
   if (isNight(state.minute) && s.trait !== 'nightOwl' && job.exposed && !litNear(state, s.x, s.y)) r *= 0.75;
